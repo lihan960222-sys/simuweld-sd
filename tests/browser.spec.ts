@@ -1,0 +1,51 @@
+import { test, expect } from '@playwright/test';
+
+test('真实模型导入、选面、手动方向、载荷保存和下载', async ({page}) => {
+  const errors: string[] = [];
+  const external: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('request', r => { if (!r.url().startsWith((process.env.SFMARC_TEST_URL || 'http://127.0.0.1:8765')+'/')) external.push(r.url()); });
+  await page.goto('/#token=' + process.env.SFMARC_TEST_TOKEN);
+  await page.locator('#file').setInputFiles(process.env.SFMARC_TEST_DAT!);
+  await expect(page.locator('#model-info')).toContainText('163,924', {timeout: 90000});
+  await expect(page.locator('#busy')).toBeHidden();
+  await page.locator('#unit-confirm').check();
+  const canvas = page.locator('canvas');
+  const box = (await canvas.boundingBox())!;
+  for (const [x, y] of [[0.5,0.5],[0.4,0.5],[0.6,0.5],[0.5,0.6],[0.3,0.4]]) {
+    await canvas.click({position: {x: box.width*x, y: box.height*y}});
+    await expect(page.locator('#busy')).toBeHidden();
+    if (Number(await page.locator('#selected-count').textContent()) > 0) break;
+  }
+  await expect.poll(async()=>Number(await page.locator('#selected-count').textContent())).toBeGreaterThan(0);
+  await page.locator('#mode').selectOption('manual');
+  await page.locator('#dx').fill('3');
+  await page.locator('#dy').fill('0');
+  await page.locator('#dz').fill('-4');
+  await page.locator('#magnitude').fill('2');
+  await page.locator('#preview').click();
+  await expect(page.locator('#force-info')).toContainText('N');
+  await page.locator('#save-load').click();
+  await expect(page.locator('#load-list')).toContainText('载荷 1');
+  await page.locator('#length-unit').selectOption('mm');
+  await expect(page.locator('#busy')).toBeHidden();
+  await expect(page.locator('#unit-confirm')).not.toBeChecked();
+  await page.getByRole('button', {name: '编辑', exact: true}).click();
+  await expect(page.locator('#busy')).toBeHidden();
+  await expect(page.locator('#length-unit')).toHaveValue('mm');
+  await page.locator('#load-name').fill('夹紧压力');
+  await page.locator('#save-load').click();
+  await expect(page.locator('#load-list')).toContainText('夹紧压力');
+  await expect(page.locator('#load-count')).toHaveText('1');
+  await page.locator('#unit-confirm').check();
+  const download = page.waitForEvent('download');
+  const exportRequest = page.waitForRequest(request => request.url().endsWith('/api/export'));
+  await page.locator('#export').click();
+  const saved = (await exportRequest).postDataJSON().loads;
+  expect(saved[0].length_unit).toBe('mm');
+  expect(saved[0].force_unit).toBe('N');
+  expect(saved[0].name).toBe('夹紧压力');
+  expect((await download).suggestedFilename()).toMatch(/_loads\.zip$/);
+  expect(errors).toEqual([]);
+  expect(external).toEqual([]);
+});

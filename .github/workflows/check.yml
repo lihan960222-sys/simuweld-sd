@@ -1,0 +1,32 @@
+name: 检查与 Windows 打包
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: 安装依赖
+        run: |
+          python -m pip install -r requirements-lock.txt
+          python -m pip install -e ".[dev]"
+          npm ci
+      - name: 实际 Mentat 示例检查
+        shell: pwsh
+        run: |
+          python scripts/fetch_sample.py
+          $env:SFMARC_TEST_DAT = "$PWD/work/elemtype7_tension.dat"
+          python -m pytest -q
+          npm run build
+      - name: Windows 打包
+        run: python -m PyInstaller --noconfirm --distpath release --workpath work/build workbench.spec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sfMarc-Workbench-Windows
+          path: release/sfMarc-Workbench
