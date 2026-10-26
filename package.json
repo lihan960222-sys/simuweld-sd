@@ -1,11 +1,12 @@
 {
   "name": "sfmarc-workbench",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:viewer": "playwright test --config playwright.viewer.config.ts"
   },
   "dependencies": {"three": "^0.180.0"},
   "devDependencies": {

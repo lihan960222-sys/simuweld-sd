@@ -4,6 +4,8 @@
 
 模型文件仅在本机处理，原文件保留。浏览器与 Python 服务通过 `127.0.0.1` 通信，页面资源随程序提供。
 
+0.1.1：拖动结束后的惯性衰减时间减半；根据模型和视角自动调整显示深度范围，改善相近表面的显示稳定性。
+
 ## Windows 使用
 
 1. 解压整个程序目录，双击 `sfMarc-Workbench.exe`。保留同目录的 `_internal` 文件夹。
@@ -79,6 +81,14 @@ Windows 打包：
 
 ```powershell
 ./scripts/build.ps1 -Python .venv/Scripts/python.exe
+```
+
+三维显示检查使用实际模型和本机 Edge，验证惯性衰减及俯视、斜视、放大视图的渲染数值，不生成截图：
+
+```powershell
+$env:SFMARC_TEST_DAT = "D:/models/C0002-3.dat"
+$env:SFMARC_TEST_PYTHON = "$PWD/.venv/Scripts/python.exe"
+npm run test:viewer
 ```
 
 ## 维护与扩展

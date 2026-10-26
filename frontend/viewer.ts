@@ -14,6 +14,8 @@ export class Viewer {
   private arrows = new THREE.Group();
   private raycaster = new THREE.Raycaster();
   private origin = new THREE.Vector3();
+  private bounds = new THREE.Box3();
+  private viewBounds = new THREE.Box3();
   private size = 1;
   private meshes: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>[] = [];
   private selected = new Set<number>();
@@ -28,6 +30,8 @@ export class Viewer {
     this.renderer.domElement.setAttribute('aria-label', '三维模型，点击表面选择，拖动旋转，滚轮缩放');
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
+    // 每帧保留量平方，使惯性的衰减时间减半。
+    this.controls.dampingFactor = 1 - (1 - 0.05) ** 2;
     this.scene.add(new THREE.HemisphereLight(0xf1f6ff, 0x617385, 2.5));
     const light = new THREE.DirectionalLight(0xffffff, 3);
     light.position.set(3, -4, 5);
@@ -49,6 +53,7 @@ export class Viewer {
     }).observe(this.host);
     this.renderer.setAnimationLoop(() => {
       this.controls.update();
+      this.updateClipping();
       this.renderer.render(this.scene, this.camera);
     });
   }
@@ -61,6 +66,7 @@ export class Viewer {
     const box = new THREE.Box3();
     for (let i=0; i<data.points.length; i+=3) box.expandByPoint(new THREE.Vector3(data.points[i], data.points[i+1], data.points[i+2]));
     box.getCenter(this.origin);
+    this.bounds.copy(box).translate(this.origin.clone().negate());
     this.size = box.getSize(new THREE.Vector3()).length();
     const bodyTriangles = new Map<number, number[]>();
     data.triangle_faces.forEach((face, triangle) => {
@@ -101,11 +107,24 @@ export class Viewer {
     const directions: Record<string, number[]> = {iso: [1,-1,0.85], top: [0,0,1], front: [0,-1,0], side: [1,0,0]};
     this.camera.up.set(0, view === 'top' ? 1 : 0, view === 'top' ? 0 : 1);
     this.camera.position.fromArray(directions[view]).normalize().multiplyScalar(this.size * 1.65);
-    this.camera.near = this.size / 10000;
-    this.camera.far = this.size * 1000;
-    this.camera.updateProjectionMatrix();
     this.controls.target.set(0,0,0);
     this.controls.update();
+    this.updateClipping();
+  }
+
+  private updateClipping() {
+    if (this.bounds.isEmpty()) return;
+    this.camera.updateMatrixWorld();
+    this.viewBounds.copy(this.bounds).applyMatrix4(this.camera.matrixWorldInverse);
+    // 保留载荷箭头的显示空间，同时提高相近表面的深度精度。
+    const margin = this.size * 0.05;
+    const near = Math.max(this.size * 1e-5, -this.viewBounds.max.z - margin);
+    const far = Math.max(near * 2, -this.viewBounds.min.z + margin);
+    if (near !== this.camera.near || far !== this.camera.far) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   highlight(faces: number[]) {
