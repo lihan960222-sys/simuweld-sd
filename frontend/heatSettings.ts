@@ -58,12 +58,12 @@ export class HeatSettings {
     this.svg.innerHTML=`<rect x="${x-disc}" y="${top}" width="${disc*2}" height="${surface}" fill="#ffb347" opacity=".12" stroke="#bd781e" stroke-dasharray="3 3"/>
       <path d="M${x-upper} ${top}L${x-lower} ${bottom}Q${x} ${bottom+lower*.4} ${x+lower} ${bottom}L${x+upper} ${top}Z" fill="#f8ad66" stroke="#bc6328" opacity="${0.3+heat.volume_heat_fraction*.6}"/>
       <ellipse cx="${x}" cy="${top}" rx="${upper}" ry="${upper*.2}" fill="#ffdd9b" stroke="#bc6328"/>
-      <ellipse cx="${x}" cy="${top}" rx="${disc}" ry="${disc*.2}" fill="none" stroke="#df9026" stroke-dasharray="3 2"/>
+      <ellipse class="surface-disc" aria-label="表面圆盘" cx="${x}" cy="${top}" rx="${disc}" ry="${disc*.2}" fill="#6ec9e3" fill-opacity=".8" stroke="#1783a5" stroke-width="1.8"/>
       <line x1="${x}" y1="${top}" x2="${x+upper}" y2="${top}" stroke="#344c5b"/>
       <path d="M230 ${top}H240M235 ${top}V${bottom}M230 ${bottom}H240" fill="none" stroke="#344c5b"/>
       <text x="125" y="18" text-anchor="middle">上部半径 ${heat.conical_upper_radius} mm</text>
       <text x="125" y="222" text-anchor="middle">下部半径 ${heat.conical_lower_radius} mm</text>
       <text x="125" y="241" text-anchor="middle">深度 ${heat.conical_depth} mm</text>
-      <text x="${x}" y="${Math.min(205,bottom+lower*.2+20)}" text-anchor="middle">圆盘半径 ${heat.disc_radius} mm</text>`;
+      <text class="surface-label" x="${x}" y="${Math.min(205,bottom+lower*.2+20)}" text-anchor="middle">表面圆盘半径 ${heat.disc_radius} mm</text>`;
   }
 }

@@ -34,6 +34,6 @@ export class WeldTimeline {
     while(upper-lower>1) {const middle=(lower+upper)>>1;if(distances[middle]<=distance) lower=middle;else upper=middle;}
     const fraction=(distance-distances[lower])/(distances[upper]-distances[lower]);
     const point=path.points[lower].map((value,axis)=>value+(path.points[upper][axis]-value)*fraction);
-    return {name:path.name,point,heat_source:path.heat_source,welding:elapsed<weldEnd && elapsed<this.duration};
+    return {name:path.name,point,path_index:this.paths.indexOf(item),segment_index:lower,heat_source:path.heat_source,welding:elapsed<weldEnd && elapsed<this.duration};
   }
 }

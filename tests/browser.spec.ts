@@ -31,9 +31,10 @@ test('几何背景、热源比例图、移动预览与完整参数导出',async(
   await page.locator('#weld-start').selectOption('13');await page.locator('#weld-end').selectOption('281');
   await page.locator('#weld-pause').fill('2');await page.locator('#weld-add').click();
   await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
+  await expect(page.locator('#weld-source-info')).toContainText('295');
   await page.locator('#weld-list .weld-card').first().getByRole('button',{name:'编辑',exact:true}).click();
   await expect(page.locator('#weld-play')).toBeDisabled();
-  await page.locator('#weld-source').selectOption('1');
+  await page.locator('#weld-cancel').click();
   await expect(page.locator('#weld-play')).toBeEnabled();
   await expect(page.locator('#export')).toBeEnabled();
   await page.locator('#weld-progress').scrollIntoViewIfNeeded();
@@ -72,6 +73,44 @@ test('几何背景、热源比例图、移动预览与完整参数导出',async(
     await page.setViewportSize({width,height:960});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   }
+  expect(errors).toEqual([]);
+});
+
+test('CSV 单次导入，重复内容保留焊路，更换文件需要确认',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await page.getByRole('button',{name:'生成焊路',exact:true}).click();
+  await page.locator('#weld-heat-save').click();
+  await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
+  await expect(page.locator('#weld-source-info')).toContainText('295');
+  await page.locator('#weld-start').selectOption('13');await page.locator('#weld-end').selectOption('281');
+  await page.locator('#weld-name').fill('保留的焊路');await page.locator('#weld-add').click();
+  await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
+  await expect(page.locator('#busy')).toBeHidden();
+  await expect(page.locator('#weld-source-info')).toContainText('295');
+  await expect(page.locator('#weld-source-info')).not.toContainText('590');
+  await expect(page.locator('#weld-source')).toHaveCount(0);
+  expect(await page.locator('#weld-files').evaluate(element=>(element as HTMLInputElement).multiple)).toBe(false);
+  await expect(page.locator('#weld-start')).toHaveValue('13');await expect(page.locator('#weld-end')).toHaveValue('281');
+  await expect(page.locator('#weld-list .weld-card')).toHaveCount(1);
+  await page.locator('#weld-files').setInputFiles({name:'invalid.csv',mimeType:'text/csv',buffer:Buffer.from('Index,X,Y,Z\n1,0,0,0\n')});
+  await expect(page.locator('#message')).toContainText('至少包含两个点');
+  await expect(page.locator('#weld-source-info')).toContainText('295');
+  await expect(page.locator('#weld-list .weld-card')).toContainText('保留的焊路');
+  const nextFile='work/weld-reference/welding_path_output/pass1_segment1.csv';
+  const cancel=page.waitForEvent('dialog');await page.locator('#weld-files').setInputFiles(nextFile);
+  const first=await cancel;expect(first.type()).toBe('confirm');expect(first.message()).toContain('清空');await first.dismiss();
+  await expect(page.locator('#busy')).toBeHidden();
+  await expect(page.locator('#weld-source-info')).toContainText('295');
+  await expect(page.locator('#weld-list .weld-card')).toContainText('保留的焊路');
+  const accept=page.waitForEvent('dialog');await page.locator('#weld-files').setInputFiles(nextFile);
+  const second=await accept;expect(second.type()).toBe('confirm');await second.accept();
+  await expect(page.locator('#busy')).toBeHidden();
+  await expect(page.locator('#weld-source-info')).toContainText('pass1_segment1.csv');
+  await expect(page.locator('#weld-source-info')).toContainText('269');
+  await expect(page.locator('#weld-list .weld-card')).toHaveCount(0);
+  await expect(page.locator('#weld-heat-profile option')).toHaveCount(1);
+  await expect(page.locator('#weld-start')).toHaveValue('0');await expect(page.locator('#weld-end')).toHaveValue('268');
   expect(errors).toEqual([]);
 });
 

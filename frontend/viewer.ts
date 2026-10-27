@@ -7,6 +7,7 @@ export interface MeshData {
   edges: number[]; edge_bodies: number[];
 }
 export interface PathData { id: number; points: number[][]; }
+export interface WeldTrailPath { points: number[][]; radius: number; direction: number[]; }
 
 export class Viewer {
   private renderer = new THREE.WebGLRenderer({antialias: true});
@@ -21,6 +22,15 @@ export class Viewer {
   private models = new THREE.Group();
   private arrows = new THREE.Group();
   private paths = new THREE.Group();
+  private weldTrails = new THREE.Group();
+  private trailMeshes: THREE.Mesh<THREE.BufferGeometry,THREE.MeshBasicMaterial>[]=[];
+  private trailLines: THREE.Line<THREE.BufferGeometry,THREE.LineBasicMaterial>[]=[];
+  private trailPoints: THREE.Vector3[][]=[];
+  private trailSides: THREE.Vector3[][]=[];
+  private trailBounds = new THREE.Box3();
+  private trailScale = 1;
+  private partialWeldTrail: THREE.Mesh<THREE.BufferGeometry,THREE.MeshBasicMaterial> | null=null;
+  private partialWeldLine: THREE.Line<THREE.BufferGeometry,THREE.LineBasicMaterial> | null=null;
   private hoverPoint = new THREE.Points(new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute([0,0,0],3)),new THREE.PointsMaterial({color:0xffe89a,size:14,sizeAttenuation:false,depthTest:false,depthWrite:false,transparent:true}));
   private torch = new THREE.Group();
   private heat = new THREE.Group();
@@ -62,7 +72,7 @@ export class Viewer {
     const light = new THREE.DirectionalLight(0xffffff, 3);
     light.position.set(3, -4, 5);
     this.scene.add(light, this.models, this.arrows, this.torch);
-    this.pathScene.add(this.paths,this.hoverPoint);
+    this.pathScene.add(this.weldTrails,this.paths,this.hoverPoint);
     const glow=document.createElement('canvas');glow.width=64;glow.height=64;
     const context=glow.getContext('2d')!,gradient=context.createRadialGradient(32,32,2,32,32,32);
     gradient.addColorStop(0,'#ffffff');gradient.addColorStop(.25,'#ffffff');gradient.addColorStop(1,'#ffffff00');
@@ -153,7 +163,7 @@ export class Viewer {
 
   private updatePathCamera() {
     this.camera.updateMatrixWorld();this.pathCamera.copy(this.camera);
-    const box=this.pathBounds.clone().applyMatrix4(this.camera.matrixWorldInverse),margin=Math.max(this.size*.05,1e-9);
+    const box=this.pathBounds.clone().union(this.trailBounds).applyMatrix4(this.camera.matrixWorldInverse),margin=Math.max(this.size*.05,1e-9);
     this.pathCamera.near=Math.max(1e-12,-box.max.z-margin);
     this.pathCamera.far=Math.max(this.pathCamera.near*2,-box.min.z+margin);
     this.pathCamera.updateProjectionMatrix();
@@ -202,6 +212,7 @@ export class Viewer {
 
   load(data: MeshData) {
     this.hideWeldPreview();
+    this.clearWeldTrails();
     this.clearPathHover();
     this.clearGroup(this.models);
     this.clearArrows();
@@ -392,6 +403,63 @@ export class Viewer {
     this.torch.visible=true;this.heat.visible=welding;
   }
   hideWeldPreview() { this.torch.visible=false; }
+  setWeldTrails(paths: WeldTrailPath[],scale: number) {
+    if(!Number.isFinite(scale) || scale<=0) throw new Error('焊路显示比例必须大于零。');
+    this.clearWeldTrails();this.trailScale=scale;
+    for(const path of paths) {
+      const normalLength=Math.hypot(...path.direction);
+      if(!Number.isFinite(path.radius) || path.radius<=0 || path.direction.length!==3 || !Number.isFinite(normalLength) || !normalLength || path.points.length<2) throw new Error('焊接轨迹尺寸、方向或点数无效。');
+      if(path.points.some(point=>point.length!==3 || !point.every(Number.isFinite))) throw new Error('焊接轨迹坐标无效。');
+      const normal=new THREE.Vector3().fromArray(path.direction).divideScalar(normalLength);
+      const points=path.points.map(point=>new THREE.Vector3().fromArray(point).multiplyScalar(scale).sub(this.origin));
+      const positions=new Float32Array((points.length-1)*18),sides: THREE.Vector3[]=[];
+      for(let index=0;index<points.length-1;index++) {
+        const direction=points[index+1].clone().sub(points[index]);
+        if(!Number.isFinite(direction.length()) || direction.lengthSq()===0) throw new Error('相邻轨迹点距离必须大于零。');
+        const side=new THREE.Vector3().crossVectors(normal,direction);
+        if(side.lengthSq()<direction.lengthSq()*1e-20) {
+          const axis=Math.abs(direction.x)<=Math.abs(direction.y) && Math.abs(direction.x)<=Math.abs(direction.z)?0:Math.abs(direction.y)<=Math.abs(direction.z)?1:2;
+          side.crossVectors(new THREE.Vector3().setComponent(axis,1),direction);
+        }
+        side.normalize().multiplyScalar(path.radius*scale);sides.push(side);
+        this.writeTrailSegment(positions,index*18,points[index],points[index+1],side);
+      }
+      const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(positions,3));
+      geometry.computeBoundingBox();geometry.computeBoundingSphere();geometry.setDrawRange(0,0);
+      const mesh=new THREE.Mesh(geometry,this.trailMaterial());mesh.renderOrder=19;
+      this.trailBounds.union(geometry.boundingBox!);this.weldTrails.add(mesh);this.trailMeshes.push(mesh);this.trailPoints.push(points);this.trailSides.push(sides);
+      const center=new THREE.BufferGeometry().setFromPoints(points);center.setDrawRange(0,0);
+      const line=new THREE.Line(center,this.trailLineMaterial());line.renderOrder=21.5;this.trailLines.push(line);
+    }
+    this.weldTrails.add(...this.trailLines);
+    const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(new Float32Array(18),3).setUsage(THREE.DynamicDrawUsage));
+    this.partialWeldTrail=new THREE.Mesh(geometry,this.trailMaterial());
+    this.partialWeldTrail.renderOrder=19;this.partialWeldTrail.frustumCulled=false;this.partialWeldTrail.visible=false;this.weldTrails.add(this.partialWeldTrail);
+    const center=new THREE.BufferGeometry().setAttribute('position',new THREE.BufferAttribute(new Float32Array(6),3).setUsage(THREE.DynamicDrawUsage));
+    this.partialWeldLine=new THREE.Line(center,this.trailLineMaterial());
+    this.partialWeldLine.renderOrder=21.5;this.partialWeldLine.frustumCulled=false;this.partialWeldLine.visible=false;this.weldTrails.add(this.partialWeldLine);
+  }
+  showWeldProgress(pathIndex: number,segmentIndex: number,point: number[]) {
+    if(!Number.isInteger(pathIndex) || !Number.isInteger(segmentIndex) || !this.trailPoints[pathIndex]?.[segmentIndex+1] || point.length!==3 || !point.every(Number.isFinite) || !this.partialWeldTrail || !this.partialWeldLine) throw new Error('焊接轨迹进度无效。');
+    this.trailMeshes.forEach((mesh,index)=>mesh.geometry.setDrawRange(0,index<pathIndex?mesh.geometry.getAttribute('position').count:index===pathIndex?segmentIndex*6:0));
+    this.trailLines.forEach((line,index)=>line.geometry.setDrawRange(0,index<pathIndex?line.geometry.getAttribute('position').count:index===pathIndex?segmentIndex+1:0));
+    const start=this.trailPoints[pathIndex][segmentIndex],end=new THREE.Vector3().fromArray(point).multiplyScalar(this.trailScale).sub(this.origin);
+    const position=this.partialWeldTrail.geometry.getAttribute('position') as THREE.BufferAttribute;
+    this.writeTrailSegment(position.array as Float32Array,0,start,end,this.trailSides[pathIndex][segmentIndex]);
+    position.needsUpdate=true;this.partialWeldTrail.visible=true;
+    const center=this.partialWeldLine.geometry.getAttribute('position') as THREE.BufferAttribute;
+    start.toArray(center.array,0);end.toArray(center.array,3);center.needsUpdate=true;this.partialWeldLine.visible=true;
+  }
+  clearWeldTrails() {
+    this.clearGroup(this.weldTrails);this.trailMeshes=[];this.trailLines=[];this.trailPoints=[];this.trailSides=[];this.trailBounds.makeEmpty();this.partialWeldTrail=null;this.partialWeldLine=null;
+  }
+  private trailMaterial() { return new THREE.MeshBasicMaterial({color:0xe86b40,side:THREE.DoubleSide,transparent:true,opacity:.85,depthTest:false,depthWrite:false}); }
+  // 正常缩放时，中心线保留完成颜色，实体带仍使用热源的物理宽度。
+  private trailLineMaterial() { return new THREE.LineBasicMaterial({color:0xe86b40,transparent:true,depthTest:false,depthWrite:false}); }
+  private writeTrailSegment(positions: Float32Array,offset: number,start: THREE.Vector3,end: THREE.Vector3,side: THREE.Vector3) {
+    const first=start.clone().add(side),second=start.clone().sub(side),third=end.clone().add(side),fourth=end.clone().sub(side);
+    [first,second,third,third,second,fourth].forEach((point,index)=>point.toArray(positions,offset+index*3));
+  }
   setPaths(data: PathData[], selected: number, range: [number,number], onPick: (path: number, point: number)=>void) {
     this.clearPathHover();
     this.clearGroup(this.paths); this.pathBounds.makeEmpty(); this.pathFocus.makeEmpty(); this.pathPick=onPick;
@@ -408,9 +476,7 @@ export class Viewer {
         const point=new THREE.Vector3().fromArray(xyz).sub(this.origin);
         point.toArray(coordinates,index*3); this.pathBounds.expandByPoint(point);
         if (active && index>=low && index<=high) this.pathFocus.expandByPoint(point);
-        const color=new THREE.Color(active && index>=low && index<=high?0xe59b26:0x4b8c99);
-        if(active && index===range[0]) color.set(0x238355);
-        if(active && index===range[1]) color.set(0xc04456);
+        const color=new THREE.Color(active && index>=low && index<=high?0xe59b26:0x9b9b9b);
         color.toArray(colors,index*3);
       });
       const geometry=new THREE.BufferGeometry();

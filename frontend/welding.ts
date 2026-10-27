@@ -16,6 +16,9 @@ interface Services {
 
 export class WeldingTool {
   private sources: SourcePath[]=[];
+  private currentSource=0;
+  private sourceDigest='';
+  private sourceFilename='';
   private entries: WeldEntry[]=[];
   private editing: number | null=null;
   private active=false;
@@ -39,10 +42,9 @@ export class WeldingTool {
       <div class="tool-heading"><h1>生成焊路</h1><p class="hint">按列表顺序生成焊路与焊后停止时间。</p></div>
       <section><h2>路径点</h2>
         <label>CSV 坐标单位<select id="weld-unit"><option>mm</option><option>m</option></select></label>
-        <label class="file-button">导入 CSV<input id="weld-files" type="file" accept=".csv" multiple></label>
+        <label class="file-button">导入 CSV<input id="weld-files" type="file" accept=".csv"></label>
         <p class="hint">列：PathID、Order、X、Y、Z；兼容 WeldID、PointID 或 Index 点序，NodeID 可选。</p>
         <div id="weld-source-info" class="model-info">尚未导入路径</div>
-        <label>当前路径<select id="weld-source" disabled></select></label>
       </section>
       <section><h2 id="weld-heading">添加焊路</h2>
         <div class="input-row"><label>起点<select id="weld-start" disabled></select></label><label>终点<select id="weld-end" disabled></select></label></div>
@@ -85,21 +87,24 @@ export class WeldingTool {
     this.element('weld-heat-cancel').onclick=()=>this.loadHeat(this.heatEditing ?? Number(this.select('weld-heat-profile').value));
     this.select('weld-heat-profile').onchange=()=>this.loadHeat(Number(this.select('weld-heat-profile').value));
     this.field('weld-files').onchange=()=>{void this.services.run('正在读取路径点…',async()=>{
-      const files=Array.from(this.field('weld-files').files || []);
-      if(!files.length) return;
-      const data=new FormData(); data.append('unit',this.field('weld-unit').value);
-      files.forEach(file=>data.append('files',file,file.name));
-      const result:{paths: SourcePath[]}=await (await this.services.api('weld-paths',data)).json();
-      const count=this.sources.reduce((total,path)=>total+path.points.length,0)+result.paths.reduce((total,path)=>total+path.points.length,0);
-      if(count>100000 || this.sources.length+result.paths.length>1000) throw new Error('当前页面最多导入 1000 条路径、10 万个点。');
-      const first=this.sources.length; this.sources.push(...result.paths);
-      this.sources.slice(first).forEach((path,index)=>this.select('weld-source').add(new Option(path.name,String(first+index))));
-      this.select('weld-source').value=String(first); this.select('weld-source').disabled=false;
-      this.element('weld-source-info').textContent=`${this.sources.length} 条路径 · ${count.toLocaleString()} 个点`;
-      this.cancelEdit(); this.chooseSource(); if(!this.services.hasModel()) this.viewer.fit(); this.services.changed();
+      const file=this.field('weld-files').files?.[0];
+      if(!file) return;
       this.field('weld-files').value='';
+      if(file.size>20*1024*1024) throw new Error('CSV 文件不能超过 20 MB。');
+      const unit=this.field('weld-unit').value;
+      const hash=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+      const digest=unit+':'+Array.from(new Uint8Array(hash),value=>value.toString(16).padStart(2,'0')).join('');
+      if(digest===this.sourceDigest) return;
+      const data=new FormData();data.append('unit',unit);data.append('files',file,file.name);
+      const result:{paths: SourcePath[]}=await (await this.services.api('weld-paths',data)).json();
+      const count=result.paths.reduce((total,path)=>total+path.points.length,0);
+      if(count>100000 || result.paths.length>1000) throw new Error('当前页面最多导入 1000 条路径、10 万个点。');
+      if(this.entries.length && !confirm('更换 CSV 将清空当前焊路列表，是否继续？')) return;
+      this.sources=result.paths;this.currentSource=0;this.sourceDigest=digest;this.sourceFilename=file.name;this.entries=[];
+      this.element('weld-source-info').textContent=`${file.name}\n${this.sources.length} 条路径 · ${count.toLocaleString()} 个点`;
+      this.setPickEnd('start');this.renderList();
+      this.cancelEdit(); this.chooseSource(); if(!this.services.hasModel()) this.viewer.fit(); this.services.changed();
     });};
-    this.select('weld-source').onchange=()=>{this.cancelEdit();this.chooseSource();};
     for(const id of ['weld-start','weld-end']) this.select(id).onchange=()=>this.draw();
     this.element('weld-full').onclick=()=>{if(this.sources.length) this.chooseSource();};
     this.element('weld-reverse').onclick=()=>{
@@ -110,7 +115,7 @@ export class WeldingTool {
     for(const target of ['start','end'] as const) this.element('weld-pick-'+target).onclick=()=>this.setPickEnd(target);
     this.element('weld-cancel').onclick=()=>this.cancelEdit();
     this.element('weld-add').onclick=()=>{void this.services.run('正在添加焊路…',async()=>{
-      const source=Number(this.select('weld-source').value),start=Number(this.select('weld-start').value),end=Number(this.select('weld-end').value);
+      const source=this.currentSource,start=Number(this.select('weld-start').value),end=Number(this.select('weld-end').value);
       const name=this.field('weld-name').value.trim(), pause=this.field('weld-pause');
       if(!name || /[\u0000-\u001f\u007f]/.test(name)) throw new Error('请输入有效的焊路名称。');
       if(!pause.value || !pause.checkValidity() || !Number.isFinite(pause.valueAsNumber)) throw new Error('焊后停止时间应为大于或等于零的秒数。');
@@ -199,7 +204,7 @@ export class WeldingTool {
     cancelAnimationFrame(this.animation);this.animation=0;this.element('weld-play').textContent='播放';
   }
   private invalidatePreview() {
-    this.pause();this.timeline=null;this.previewHeat=null;this.elapsed=0;this.viewer.hideWeldPreview();
+    this.pause();this.timeline=null;this.previewHeat=null;this.elapsed=0;this.viewer.hideWeldPreview();this.viewer.clearWeldTrails();
     this.field('weld-progress').value='0';this.element('weld-time').textContent='添加或修改焊路后，点击播放';
     for(const id of ['weld-play','weld-reset','weld-progress']) this.element<HTMLButtonElement>(id).disabled=!this.canExport;
   }
@@ -210,9 +215,14 @@ export class WeldingTool {
   }
   private preparePreview() {
     if(this.timeline) return;
-    this.direction();
-    this.timeline=new WeldTimeline(this.entries.map(entry=>({name:entry.name,points:this.coordinates(entry),pause_after:entry.pause_after,heat_source:entry.heat_source,
-      velocity:this.heats.find(profile=>profile.name===entry.heat_source)!.parameters.velocity})));
+    const direction=this.direction();
+    const paths=this.entries.map(entry=>{
+      const heat=this.heats.find(profile=>profile.name===entry.heat_source)!.parameters;
+      return {name:entry.name,points:this.coordinates(entry),pause_after:entry.pause_after,heat_source:entry.heat_source,
+        velocity:heat.velocity,radius:Math.max(heat.conical_upper_radius,heat.disc_radius),direction};
+    });
+    const timeline=new WeldTimeline(paths);
+    this.viewer.setWeldTrails(paths,this.services.unit()==='m'?0.001:1);this.timeline=timeline;
   }
   private displayFrame() {
     const frame=this.timeline!.at(this.elapsed);
@@ -221,6 +231,7 @@ export class WeldingTool {
       this.viewer.configureWeldPreview(heat.parameters,this.direction(),this.services.unit()==='m'?0.001:1);this.previewHeat=frame.heat_source;
     }
     this.viewer.showWeldFrame(frame.point,this.services.unit()==='m'?0.001:1,frame.welding);
+    this.viewer.showWeldProgress(frame.path_index,frame.segment_index,frame.point);
     this.field('weld-progress').value=String(this.elapsed/this.timeline!.duration);
     this.field('weld-progress').setAttribute('aria-valuetext',`${this.elapsed.toFixed(3)} / ${this.timeline!.duration.toFixed(3)} s`);
     this.element('weld-time').textContent=`${this.elapsed.toFixed(3)} / ${this.timeline!.duration.toFixed(3)} s · ${frame.name} · ${frame.heat_source} · ${this.elapsed>=this.timeline!.duration?'完成':frame.welding?'焊接':'焊后停止'}`;
@@ -232,12 +243,14 @@ export class WeldingTool {
   }
 
   private chooseSource() {
-    const source=this.sources[Number(this.select('weld-source').value)];
+    const source=this.sources[this.currentSource];
     for(const id of ['weld-start','weld-end']) {
       const select=this.select(id); select.replaceChildren(); select.disabled=false;
       source.points.forEach((point,index)=>select.add(new Option(String(point.order)+(point.node_id?' · '+point.node_id:''),String(index))));
     }
     this.select('weld-end').value=String(source.points.length-1);
+    const count=this.sources.reduce((total,path)=>total+path.points.length,0);
+    this.element('weld-source-info').textContent=`${this.sourceFilename}\n${this.sources.length} 条路径 · ${count.toLocaleString()} 个点`+(this.sources.length>1?'\n'+source.name:'');
     this.element<HTMLButtonElement>('weld-add').disabled=false;
     this.draw();
   }
@@ -254,15 +267,15 @@ export class WeldingTool {
 
   private draw() {
     if(!this.sources.length) return;
-    const source=Number(this.select('weld-source').value),start=Number(this.select('weld-start').value),end=Number(this.select('weld-end').value);
+    const source=this.currentSource,start=Number(this.select('weld-start').value),end=Number(this.select('weld-end').value);
     const coordinates=this.coordinates({source,start,end});
     const length=coordinates.slice(1).reduce((sum,point,index)=>sum+Math.hypot(...point.map((value,axis)=>value-coordinates[index][axis])),0);
-    this.element('weld-range-info').textContent=`${coordinates.length} 个点 · ${length.toLocaleString('zh-CN',{maximumFractionDigits:3})} mm · 起点绿色，终点红色`;
+    this.element('weld-range-info').textContent=`${coordinates.length} 个点 · ${length.toLocaleString('zh-CN',{maximumFractionDigits:3})} mm · 灰色未选，黄色已选`;
     if(!this.active) return;
     const scale=this.services.unit()==='m'?0.001:1;
     this.viewer.setPaths(this.sources.map((path,id)=>({id,points:path.points.map(point=>point.xyz.map(value=>value*scale))})),source,[start,end],(path,index)=>{
       if(this.panel.inert) return;
-      if(path!==Number(this.select('weld-source').value)) {this.cancelEdit();this.select('weld-source').value=String(path);this.chooseSource();}
+      if(path!==this.currentSource) {this.cancelEdit();this.currentSource=path;this.chooseSource();}
       this.select('weld-'+this.pickEnd).value=String(index);
       if(this.pickEnd==='start') this.setPickEnd('end');
       this.draw(); this.services.changed();
@@ -298,7 +311,7 @@ export class WeldingTool {
       const buttons=document.createElement('div'); buttons.className='row-buttons';
       const button=(label: string, action: ()=>void)=>{const element=document.createElement('button');element.textContent=label;element.onclick=action;buttons.append(element);return element;};
       button('编辑',()=>{
-        this.editing=index; this.select('weld-source').value=String(entry.source); this.chooseSource();
+        this.editing=index; this.currentSource=entry.source; this.chooseSource();
         this.invalidatePreview();
         this.select('weld-start').value=String(entry.start); this.select('weld-end').value=String(entry.end);
         this.field('weld-name').value=entry.name; this.field('weld-pause').value=String(entry.pause_after);

@@ -107,6 +107,7 @@ canvas { display: block; width: 100%; height: 100%; outline: none; }
 .heat-fields label { min-width: 0; }
 #heat-diagram { width: 100%; background: #f2f6f8; border-radius: 8px; }
 #heat-diagram text { font: 11px system-ui,sans-serif; fill: #344c5b; }
+#heat-diagram .surface-label { fill: #1783a5; }
 #heat-error { color: #a34520; font-size: 12px; }
 #heat-error:empty { display: none; }
 #weld-time { font-size: 12px; line-height: 1.7; display: block; }

@@ -10,6 +10,108 @@ test.beforeEach(async ({page}) => {
   await page.evaluate(async () => { await (window as any).ready; });
 });
 
+test('未选中的路径点为灰色，选中范围包含端点且统一为黄色',async({page})=>{
+  const colors=await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    viewer.setPaths([{id:0,points:[[0,0,0],[1,0,0],[2,0,0],[3,0,0]]},{id:1,points:[[0,1,0],[1,1,0]]}],0,[1,2],()=>{});
+    return viewer.paths.children.filter((object:any)=>object.isPoints).map((object:any)=>Array.from(object.geometry.getAttribute('color').array));
+  });
+  const first=colors[0] as number[],other=colors[1] as number[];
+  for(const color of [first.slice(0,3),first.slice(9,12),other.slice(0,3)]) expect(Math.max(...color)-Math.min(...color)).toBeLessThan(1e-7);
+  expect(first.slice(3,6)).toEqual(first.slice(6,9));
+  expect(first[3]).toBeGreaterThan(first[4]);expect(first[4]).toBeGreaterThan(first[5]);
+});
+
+test('已焊接轨迹按热源宽度逐段着色，回到之前进度时恢复',async({page})=>{
+  await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    const points=[[0,0,0],[10,0,0],[20,0,0]],second=[[0,10,0],[10,10,0]];
+    viewer.setPaths([{id:0,points:points.map(point=>point.map(value=>value*.001))},{id:1,points:second.map(point=>point.map(value=>value*.001))}],0,[0,2],()=>{});
+    viewer.fit('xy');viewer.fitPaths();
+    viewer.setWeldTrails([{points,radius:1,direction:[0,0,1]},{points:second,radius:2,direction:[0,0,1]}],.001);
+  });
+  const sample=(point:number[])=>page.evaluate(point=>new Promise<number[]>(resolve=>requestAnimationFrame(()=>{
+    const viewer=(window as any).viewer;viewer.updatePathCamera();
+    const position=viewer.origin.clone().fromArray(point).multiplyScalar(.001).sub(viewer.origin).project(viewer.pathCamera);
+    const gl=viewer.renderer.getContext(),pixels=new Uint8Array(4);
+    gl.readPixels(Math.floor((position.x+1)*gl.drawingBufferWidth/2),Math.floor((position.y+1)*gl.drawingBufferHeight/2),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+    resolve(Array.from(pixels));
+  })),point);
+  const before=await sample([2.5,.4,0]);
+  await page.evaluate(()=>(window as any).viewer.showWeldProgress(0,0,[5,0,0]));
+  const first=await sample([2.5,.4,0]),future=await sample([7.5,.4,0]);
+  expect(first[0]-first[1]).toBeGreaterThan(30);expect(first).not.toEqual(before);
+  expect(future[0]-future[1]).toBeLessThan(30);
+  const widths=await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    return viewer.weldTrails.children.slice(0,2).map((mesh:any)=>{
+      const position=mesh.geometry.getAttribute('position');
+      return Math.hypot(position.getX(0)-position.getX(1),position.getY(0)-position.getY(1),position.getZ(0)-position.getZ(1));
+    });
+  });
+  expect(widths[0]).toBeCloseTo(.002,8);expect(widths[1]).toBeCloseTo(.004,8);
+  await page.evaluate(()=>(window as any).viewer.showWeldProgress(1,0,[5,10,0]));
+  const completed=await sample([7.5,.4,0]),second=await sample([2.5,10.8,0]);
+  expect(completed[0]-completed[1]).toBeGreaterThan(30);expect(second[0]-second[1]).toBeGreaterThan(30);
+  await page.evaluate(()=>(window as any).viewer.showWeldProgress(0,0,[2,0,0]));
+  const rewind=await sample([7.5,.4,0]);expect(rewind[0]-rewind[1]).toBeLessThan(30);
+  await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    viewer.setWeldTrails([{points:[[0,0,0],[10,0,0]],radius:1,direction:[1,0,0]}],.001);
+    viewer.showWeldProgress(0,0,[5,0,0]);
+  });
+  expect(await page.evaluate(()=>Array.from((window as any).viewer.weldTrails.children[0].geometry.getAttribute('position').array).every(value=>Number.isFinite(value)))).toBe(true);
+  await page.evaluate(()=>(window as any).viewer.clearWeldTrails());
+  expect(await page.evaluate(()=>(window as any).viewer.weldTrails.children.length)).toBe(0);
+});
+
+test('正常缩放下密集黄色路径点保留选择颜色，同时清楚显示已焊接的橙色',async({page})=>{
+  await page.evaluate(()=>{
+    const viewer=(window as any).viewer,points=Array.from({length:301},(_,index)=>[index*200/300,0,0]);
+    viewer.setPaths([{id:0,points:points.map(point=>point.map(value=>value*.001))}],0,[0,300],()=>{});
+    viewer.fit('xy');viewer.fitPaths();viewer.setWeldTrails([{points,radius:.18,direction:[0,0,1]}],.001);
+    viewer.showWeldProgress(0,150,[100,0,0]);
+  });
+  const strip=(from:number,to:number)=>page.evaluate(({from,to})=>new Promise<{orange:number;yellow:number;width:number}>(resolve=>requestAnimationFrame(()=>{
+    const viewer=(window as any).viewer;viewer.updatePathCamera();
+    const projected=(x:number)=>viewer.origin.clone().set(x*.001,0,0).sub(viewer.origin).project(viewer.pathCamera);
+    const first=projected(from),last=projected(to),gl=viewer.renderer.getContext();
+    const x=Math.ceil((first.x+1)*gl.drawingBufferWidth/2),right=Math.floor((last.x+1)*gl.drawingBufferWidth/2),y=Math.floor((first.y+1)*gl.drawingBufferHeight/2);
+    const width=right-x+1,pixels=new Uint8Array(width*9*4);gl.readPixels(x,y-4,width,9,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+    let orange=0,yellow=0;
+    for(let column=0;column<width;column++) {
+      let welded=false,selected=false;
+      for(let row=0;row<9;row++) {
+        const offset=(row*width+column)*4,red=pixels[offset],green=pixels[offset+1],blue=pixels[offset+2];
+        if(red>180 && red-green>90 && blue>45) welded=true;
+        if(red>200 && green>140 && green<175 && blue<50) selected=true;
+      }
+      if(welded) orange++;if(selected) yellow++;
+    }
+    resolve({orange,yellow,width});
+  })),{from,to});
+  const welded=await strip(10,90),future=await strip(110,190);
+  expect(welded.orange).toBeGreaterThan(welded.width*.75);
+  expect(welded.yellow).toBeGreaterThan(welded.width*.75);
+  expect(future.orange).toBe(0);
+  const pointer=await page.evaluate(()=>{
+    const viewer=(window as any).viewer,point=viewer.origin.clone().set(.05,0,0).sub(viewer.origin).project(viewer.pathCamera);
+    const rect=viewer.renderer.domElement.getBoundingClientRect();
+    return {x:rect.left+(point.x+1)*rect.width/2,y:rect.top+(1-point.y)*rect.height/2};
+  });
+  const brightness=()=>page.evaluate(pointer=>new Promise<number>(resolve=>requestAnimationFrame(()=>{
+    const viewer=(window as any).viewer,gl=viewer.renderer.getContext(),rect=viewer.renderer.domElement.getBoundingClientRect();
+    const x=Math.floor((pointer.x-rect.left)*gl.drawingBufferWidth/rect.width),y=Math.floor((rect.bottom-pointer.y)*gl.drawingBufferHeight/rect.height),pixels=new Uint8Array(36);
+    gl.readPixels(x-1,y-1,3,3,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+    let sum=0;for(let index=0;index<pixels.length;index+=4) sum+=pixels[index]+pixels[index+1]+pixels[index+2];resolve(sum/9);
+  })),pointer);
+  const beforeHover=await brightness();await page.mouse.move(pointer.x,pointer.y);
+  expect(await brightness()).toBeGreaterThan(beforeHover+100);
+  await page.mouse.move(5,5);
+  await page.evaluate(()=>(window as any).viewer.showWeldProgress(0,0,[0,0,0]));
+  expect((await strip(10,90)).orange).toBe(0);
+});
+
 test('焊枪与光源沿物理坐标移动，停止期间关闭光源',async({page})=>{
   const result=await page.evaluate(()=>{
     const viewer=(window as any).viewer;
