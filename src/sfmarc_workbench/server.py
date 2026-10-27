@@ -26,7 +26,7 @@ class LoadInput(BaseModel):
     mode: str
     cases: list[StrictInt]
     direction: list[float] = [0, 0, -1]
-    length_unit: str = "m"
+    length_unit: str = "mm"
     force_unit: str = "N"
     pressure_unit: str = "MPa"
     name: str = Field(default="面载荷", max_length=80)

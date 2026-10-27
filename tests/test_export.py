@@ -54,9 +54,13 @@ def test_path_traversal_rejected():
 
 def test_model_units_are_consistent_across_saved_loads(model):
     load = LoadSpec(faces=[0], magnitude=2, mode="inward", cases=[1])
-    assert preview(model, replace(load, length_unit="mm"))["pressure"] == 2
+    result = preview(model, load)
+    assert result["pressure"] == 2
+    assert result["area_unit"] == "mm²"
+    assert result["force_unit"] == "N"
+    assert preview(model, replace(load, length_unit="m"))["pressure"] == 2e6
     with pytest.raises(ValueError, match="模型单位"):
-        export_model(model, [load, replace(load, length_unit="mm")])
+        export_model(model, [load, replace(load, length_unit="m")])
 
 
 def test_manual_traction_requires_verified_follow_setting(model):

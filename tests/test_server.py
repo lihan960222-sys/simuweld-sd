@@ -38,12 +38,19 @@ def test_real_upload_selection_preview_and_export(client):
     selection = client.post("/api/select", headers=headers, json={"seed": 0, "angle": 20}).json()
     assert 0 in selection["faces"]
     load = {"faces": selection["faces"], "magnitude": 2, "mode": "inward", "cases": [1]}
-    assert client.post("/api/preview", headers=headers, json=load).json()["area"] > 0
+    preview = client.post("/api/preview", headers=headers, json=load).json()
+    assert preview["area"] > 0
+    assert preview["pressure"] == 2
+    assert preview["area_unit"] == "mm²"
+    assert preview["force_unit"] == "N"
     exported = client.post("/api/export", headers=headers, json={"loads": [load]})
     assert exported.status_code == 200
     assert exported.content[:2] == b"PK"
     with ZipFile(BytesIO(exported.content)) as archive:
         report = json.loads(archive.read("sfmarc-loads-report.json"))
         assert report["loads"][0]["cases"] == ["加载"]
+        assert report["loads"][0]["length_unit"] == "mm"
+        assert report["loads"][0]["pressure_unit"] == "MPa"
+        assert report["loads"][0]["preview"]["pressure"] == 2
         assert "加载".encode("gbk") in archive.read(report["root"])
     assert client.get("/api/mesh", headers={**headers, "X-Model-Id": "stale"}).status_code == 409

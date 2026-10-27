@@ -16,7 +16,7 @@ class LoadSpec:
     mode: str
     cases: list[int]
     direction: list[float] = field(default_factory=lambda: [0.0, 0.0, -1.0])
-    length_unit: str = "m"
+    length_unit: str = "mm"
     force_unit: str = "N"
     pressure_unit: str = "MPa"
     name: str = "面载荷"
