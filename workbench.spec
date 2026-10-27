@@ -18,6 +18,6 @@ analysis = Analysis(["run_app.py"], pathex=["src"], binaries=[], datas=datas,
                     hiddenimports=["meshioplusplus._core"],
                     excludes=["pytest", "numpy.tests", "scipy.tests", "pip"], noarchive=False)
 pyz = PYZ(analysis.pure)
-exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="sfMarc-Workbench",
+exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="SIMUWELD-SD",
           console=True, debug=False, strip=False, upx=False)
-collect = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="sfMarc-Workbench")
+collect = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="SIMUWELD-SD")

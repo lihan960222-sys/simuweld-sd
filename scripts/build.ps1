@@ -10,4 +10,4 @@ npm.cmd run build
 if ($LASTEXITCODE -ne 0) { throw "网页构建失败" }
 & $Python -m PyInstaller --noconfirm --distpath release --workpath work/build workbench.spec
 if ($LASTEXITCODE -ne 0) { throw "Windows 打包失败" }
-Write-Output "程序位置：release/sfMarc-Workbench/sfMarc-Workbench.exe"
+Write-Output "程序位置：release/SIMUWELD-SD/SIMUWELD-SD.exe"

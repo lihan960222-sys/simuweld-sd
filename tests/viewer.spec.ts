@@ -10,40 +10,148 @@ test.beforeEach(async ({page}) => {
   await page.evaluate(async () => { await (window as any).ready; });
 });
 
-async function coastFrames(page: Page, baseline: boolean) {
-  await page.evaluate(baseline => {
+async function coastFrames(page: Page) {
+  await page.evaluate(() => {
     const viewer = (window as any).viewer;
     viewer.renderer.setAnimationLoop(null);
-    viewer.controls.enableDamping = false;
-    viewer.controls.update();
-    viewer.controls.enableDamping = true;
-    if (baseline) viewer.controls.dampingFactor = 0.05;
     viewer.fit();
-  }, baseline);
+  });
   await page.mouse.move(500, 380);
   await page.mouse.down();
   await page.mouse.move(620, 380, {steps: 6});
   await page.mouse.up();
   return page.evaluate(() => {
-    const controls = (window as any).viewer.controls;
-    let previous = controls.getAzimuthalAngle();
+    const {controls,camera} = (window as any).viewer;
+    const previous = camera.quaternion.clone();
     let first = 0;
     for (let frame=0; frame<200; frame++) {
       controls.update();
-      const current = controls.getAzimuthalAngle();
-      const step = Math.abs(current-previous);
+      const step = previous.angleTo(camera.quaternion);
       if (frame===0) first=step;
       else if (step <= first*0.05) return frame;
-      previous=current;
+      previous.copy(camera.quaternion);
     }
     throw new Error('拖动后的旋转未在检查范围内停止');
   });
 }
 
-test('拖动惯性的衰减时间为原来的一半', async ({page}) => {
-  const current = await coastFrames(page, false);
-  const baseline = await coastFrames(page, true);
-  expect(current/baseline).toBeCloseTo(0.5, 1);
+test('拖动惯性在约三十帧内衰减到百分之五', async ({page}) => {
+  expect(await coastFrames(page)).toBeGreaterThanOrEqual(29);
+  expect(await coastFrames(page)).toBeLessThanOrEqual(31);
+});
+
+test('平移后的模型围绕自身中心连续翻转', async ({page}) => {
+  await page.mouse.move(450,380);
+  await page.mouse.down({button:'right'});
+  await page.mouse.move(610,440,{steps:15});
+  await page.mouse.up({button:'right'});
+  await page.evaluate(async()=>{for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);});
+  const start = await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    return {center:viewer.origin.clone().set(0,0,0).project(viewer.camera).toArray(), eye:viewer.camera.position.clone().normalize().toArray()};
+  });
+  expect(Math.hypot(start.center[0],start.center[1])).toBeGreaterThan(0.02);
+  let previous=start.eye, angle=0, drift=0;
+  for(let stroke=0;stroke<3;stroke++) {
+    await page.mouse.move(500,650);
+    await page.mouse.down();
+    for(let step=1;step<=22;step++) {
+      await page.mouse.move(500,650-step*25);
+      const state=await page.evaluate(async()=>{
+        await new Promise(requestAnimationFrame);
+        const viewer=(window as any).viewer;
+        return {center:viewer.origin.clone().set(0,0,0).project(viewer.camera).toArray(),eye:viewer.camera.position.clone().normalize().toArray()};
+      });
+      const dot=previous.reduce((sum:number,value:number,i:number)=>sum+value*state.eye[i],0);
+      angle+=Math.acos(Math.max(-1,Math.min(1,dot)));
+      drift=Math.max(drift,Math.hypot(state.center[0]-start.center[0],state.center[1]-start.center[1]));
+      previous=state.eye;
+    }
+    await page.mouse.up();
+  }
+  expect(angle).toBeGreaterThan(Math.PI*1.2);
+  expect(drift).toBeLessThan(0.005);
+});
+
+test('箭头随实际选中区域面积缩放', async ({page}) => {
+  const samples=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    const loads=await (await fetch('/work/viewer-loads.json')).json();
+    return loads.map((load:any)=>{
+      viewer.showArrows(load.centers,load.directions,load.area);
+      const point=viewer.origin.clone().fromArray(load.centers[0]).sub(viewer.origin);
+      return {length:viewer.arrows.children[0].position.distanceTo(point),area:load.area,count:load.centers.length};
+    });
+  });
+  for(const item of samples) {
+    expect(item.length).toBeGreaterThan(0);
+    expect(item.length).toBeLessThan(Math.sqrt(item.area/item.count));
+  }
+  expect(samples[0].length).toBeLessThan(samples[1].length);
+});
+
+test('坐标平面与平移、窗口调整后的点击选面', async ({page}) => {
+  const planes=await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    return ['yz','xz','xy'].map(view=>{
+      viewer.fit(view);
+      return viewer.camera.position.clone().normalize().toArray();
+    });
+  });
+  expect(planes).toEqual([[1,0,0],[0,-1,0],[0,0,1]]);
+  await page.mouse.move(450,380);
+  await page.mouse.down({button:'right'});
+  await page.mouse.move(530,410,{steps:10});
+  await page.mouse.up({button:'right'});
+  await page.setViewportSize({width:1100,height:800});
+  const target=await page.evaluate(async()=>{
+    for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);
+    const viewer=(window as any).viewer;
+    const point=viewer.origin.clone().set(0,0,-Infinity);
+    const center=point.clone();
+    let face=-1;
+    for(const mesh of viewer.meshes) {
+      const positions=mesh.geometry.getAttribute('position'), normals=mesh.geometry.getAttribute('normal');
+      mesh.userData.faceIds.forEach((id:number,i:number)=>{
+        if(normals.getZ(i*3)<0.99) return;
+        center.set(0,0,0);
+        for(let k=0;k<3;k++) {
+          center.x+=positions.getX(i*3+k)/3;
+          center.y+=positions.getY(i*3+k)/3;
+          center.z+=positions.getZ(i*3+k)/3;
+        }
+        if(center.z>point.z) {point.copy(center);face=id;}
+      });
+    }
+    point.project(viewer.camera);
+    const rect=viewer.renderer.domElement.getBoundingClientRect();
+    return {face,x:rect.left+(point.x+1)*rect.width/2,y:rect.top+(1-point.y)*rect.height/2};
+  });
+  expect(target.face).toBeGreaterThanOrEqual(0);
+  await page.mouse.click(target.x,target.y);
+  expect(await page.evaluate(()=>(window as any).picked)).toBe(target.face);
+});
+
+test('实体颜色与半透明可修改且选择颜色独立', async ({page}) => {
+  const result=await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    const mesh=viewer.meshes[0], face=mesh.userData.faceIds[0];
+    viewer.setBodyColor(mesh.userData.body,'#e45d41');
+    viewer.setBodyOpacity(mesh.userData.body,0.35);
+    viewer.highlight([face]);
+    const colors=mesh.geometry.getAttribute('color');
+    const selected=[colors.getX(0),colors.getY(0),colors.getZ(0)];
+    viewer.highlight([]);
+    const base=mesh.userData.base;
+    return {opacity:mesh.material.opacity,transparent:mesh.material.transparent,depthWrite:mesh.material.depthWrite,
+      color:base.getHexString(),selected,restored:[colors.getX(0),colors.getY(0),colors.getZ(0)],expected:[base.r,base.g,base.b]};
+  });
+  expect(result.opacity).toBe(0.35);
+  expect(result.transparent).toBe(true);
+  expect(result.depthWrite).toBe(false);
+  expect(result.color).toBe('e45d41');
+  expect(result.selected).not.toEqual(result.restored);
+  result.restored.forEach((value:number,i:number)=>expect(value).toBeCloseTo(result.expected[i],6));
 });
 
 test('实际模型的相近表面显示与高精度参考一致', async ({page}) => {
@@ -66,7 +174,7 @@ test('实际模型的相近表面显示与高精度参考一致', async ({page})
       return values;
     };
     const results = [];
-    for (const [view, scale] of [['top',1],['iso',1],['top',0.5]] as const) {
+    for (const [view, scale] of [['xy',1],['iso',1],['xy',0.5]] as const) {
       viewer.fit(view);
       camera.position.multiplyScalar(scale);
       viewer.controls.update();

@@ -13,7 +13,7 @@ from .server import create_app
 
 
 def main():
-    parser = argparse.ArgumentParser(description="sfMarc Workbench 本机面载荷编辑")
+    parser = argparse.ArgumentParser(description="SIMUWELD SD 本机面载荷编辑")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
@@ -38,7 +38,7 @@ def main():
 
     if not args.no_browser:
         threading.Thread(target=open_browser, daemon=True).start()
-    print("sfMarc Workbench\n" + url + "\n关闭此窗口将停止本机服务。", flush=True)
+    print("SIMUWELD SD\n" + url + "\n关闭此窗口将停止本机服务。", flush=True)
     server.run(sockets=[listener])
 
 

@@ -28,5 +28,5 @@ jobs:
         run: python -m PyInstaller --noconfirm --distpath release --workpath work/build workbench.spec
       - uses: actions/upload-artifact@v4
         with:
-          name: sfMarc-Workbench-Windows
-          path: release/sfMarc-Workbench
+          name: SIMUWELD-SD-Windows
+          path: release/SIMUWELD-SD

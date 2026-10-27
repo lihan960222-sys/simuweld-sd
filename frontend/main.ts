@@ -13,28 +13,27 @@ interface Load {
 interface Preview { area: number; force: number[]; face_count: number; centers: number[][]; directions: number[][]; area_unit: string; force_unit: string; }
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header><div class="brand"><span class="brand-icon">sf</span><div>sfMarc <strong>Workbench</strong><small>面载荷编辑</small></div></div><span class="local"><i></i>本机处理 · 文件不上传</span><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
+  <header><div class="brand"><span class="brand-icon">SD</span><div><strong>SIMUWELD SD</strong><small>面载荷编辑</small></div></div><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
   <main>
     <aside class="left">
-      <section><span class="eyebrow">01 / 模型</span><h2>打开模型</h2><p class="muted">选择 Simufact Welding 求解输入文件</p>
+      <section><h2>打开模型</h2><p class="muted">选择 Simufact Welding 求解输入文件</p>
         <label class="file-button">选择 DAT 文件<input id="file" type="file" accept=".dat" /></label>
         <label class="directory-button">选择模型目录（含 INCLUDE）<input id="directory" type="file" webkitdirectory multiple /></label>
         <div id="root-picker" hidden><label>主 DAT 文件<select id="root-file"></select></label><button id="import-directory">读取所选模型</button></div>
         <div id="model-info" class="model-info">尚未导入模型</div>
       </section>
       <section><div class="section-title"><h2>实体</h2><span id="body-count" class="badge">0</span></div><div id="body-list"><p class="muted">导入后可以分别显示实体。</p></div></section>
-      <section class="help"><h3>视图操作</h3><p>拖动左键：旋转<br>拖动右键：平移<br>滚动滚轮：缩放<br>点击表面：选择连续区域</p><div class="legend"><i class="amber"></i>已选表面<i class="cyan"></i>载荷方向</div></section>
       <details><summary>模型与计算设置</summary><p id="solver-info">导入后显示。</p><p id="material-info"></p><p>导出文件保留原有焊接、材料和求解设置。尚未通过 sfMarc 求解验证。</p></details>
     </aside>
-    <div class="workspace"><div class="view-tools"><button id="fit">适合窗口</button><button data-view="top">俯视</button><button data-view="front">正视</button><button data-view="side">侧视</button><label><input id="edges" type="checkbox">网格边线</label></div>
+    <div class="workspace"><div class="view-tools"><button id="fit">适合窗口</button><button data-view="xy">XY 平面</button><button data-view="xz">XZ 平面</button><button data-view="yz">YZ 平面</button><label><input id="edges" type="checkbox">网格边线</label></div>
       <div id="viewport"></div><div id="empty"><span class="empty-shape">◇</span><h1>在模型表面定义载荷</h1><p>导入 DAT 文件，点击一个面开始选择。</p></div>
       <div id="busy" hidden><span class="spinner"></span><span id="busy-text">正在读取模型…</span></div>
       <div class="selection-bar"><div><strong id="selected-count">0</strong><span>已选面</span></div><div><strong id="area-info">—</strong><span>表面积</span></div><button id="clear">清空选择</button></div>
       <div id="message" role="status" hidden></div>
     </div>
     <aside class="right">
-      <section><span class="eyebrow">02 / 选择表面</span><h2>按夹角连续选择</h2><label>相邻面最大夹角 <span id="angle-value">20°</span><input id="angle" type="range" min="0" max="90" step="1" value="20"></label><p class="hint">从点击的面沿相邻表面扩展。</p><select id="selection-mode" aria-label="选择方式"><option value="replace">替换当前选择</option><option value="add">增加选择</option><option value="remove">移除选择</option></select></section>
-      <section><span class="eyebrow">03 / 载荷</span><h2 id="load-heading">设置面载荷</h2><label>名称<input id="load-name" value="载荷 1" maxlength="80"></label>
+      <section><h2>按夹角连续选择</h2><label>相邻面最大夹角 <span id="angle-value">20°</span><input id="angle" type="range" min="0" max="90" step="1" value="20"></label><p class="hint">从点击的面沿相邻表面扩展。</p><select id="selection-mode" aria-label="选择方式"><option value="replace">替换当前选择</option><option value="add">增加选择</option><option value="remove">移除选择</option></select></section>
+      <section><h2 id="load-heading">设置面载荷</h2><label>名称<input id="load-name" value="载荷 1" maxlength="80"></label>
         <div class="input-row"><label>大小<input id="magnitude" type="number" min="0" step="any" value="1"></label><label>压力单位<select id="pressure-unit"><option>MPa</option><option>kPa</option><option>Pa</option></select></label></div>
         <label>方向<select id="mode"><option value="inward">沿表面法向 · 向内</option><option value="outward">沿表面法向 · 向外</option><option value="manual">手动方向 · 全局坐标</option></select></label>
         <div id="direction" class="input-row" hidden><label>X<input id="dx" type="number" step="any" value="0"></label><label>Y<input id="dy" type="number" step="any" value="0"></label><label>Z<input id="dz" type="number" step="any" value="-1"></label></div>
@@ -45,7 +44,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </section>
       <section><div class="section-title"><h2>已保存载荷</h2><span id="load-count" class="badge">0</span></div><div id="load-list"><p class="muted">可以添加多个载荷。</p></div><div id="combined" hidden><label>查看阶段合力<select id="combined-case"></select></label><p id="combined-force"></p><p class="hint">同一阶段重叠面的载荷相加。</p></div></section>
     </aside>
-  </main><footer><span id="status">就绪</span><span>原文件保留 · 导出到新文件</span></footer>`;
+  </main>`;
 
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => get<HTMLInputElement>(id);
@@ -80,9 +79,8 @@ async function run(text: string, action: ()=>Promise<void>) {
   if (busy) return;
   busy = true; get('busy').hidden = false; get('busy-text').textContent = text; get('message').hidden = true;
   document.querySelectorAll<HTMLElement>('aside, header, .selection-bar').forEach(element=>element.inert=true);
-  get('status').textContent = text;
-  try { await action(); get('status').textContent = '就绪'; }
-  catch (error) { message((error as Error).message); get('status').textContent = '操作未完成'; }
+  try { await action(); }
+  catch (error) { message((error as Error).message); }
   finally {
     busy = false; get('busy').hidden = true;
     document.querySelectorAll<HTMLElement>('aside, header, .selection-bar').forEach(element=>element.inert=false);
@@ -119,7 +117,7 @@ function currentLoad(): Load {
 
 async function showPreview(): Promise<Preview> {
   const result: Preview = await (await api('preview', currentLoad())).json();
-  viewer.showArrows(result.centers, result.directions);
+  viewer.showArrows(result.centers, result.directions, result.area);
   get('area-info').textContent = format(result.area)+' '+result.area_unit;
   get('force-info').textContent = `合力 (${result.force.map(format).join(', ')}) ${result.force_unit}`;
   return result;
@@ -177,10 +175,19 @@ async function importFiles(root: string) {
   get('body-count').textContent=String(info.bodies.length);
   const bodies=get('body-list'); bodies.replaceChildren();
   info.bodies.forEach(body=>{
+    const card=document.createElement('div'); card.className='body-card';
     const label=document.createElement('label'); label.className='body-row';
     const checkbox=document.createElement('input'); checkbox.type='checkbox'; checkbox.checked=true;
     checkbox.onchange=()=>{ viewer.showBody(body.id,checkbox.checked); if (!checkbox.checked) {selected=selected.filter(face=>mesh!.body_ids[face]!==body.id);lastSeed=null;updateSelection();} };
-    label.append(checkbox,document.createTextNode(body.name)); bodies.append(label);
+    label.append(checkbox,document.createTextNode(body.name));
+    const options=document.createElement('div'); options.className='body-options';
+    const color=document.createElement('input'); color.type='color'; color.value=viewer.bodyColor(body.id); color.setAttribute('aria-label',body.name+' 颜色');
+    color.oninput=()=>viewer.setBodyColor(body.id,color.value);
+    const transparent=document.createElement('label'); transparent.className='check';
+    const opacity=document.createElement('input'); opacity.type='checkbox'; opacity.setAttribute('aria-label',body.name+' 半透明');
+    opacity.onchange=()=>viewer.setBodyOpacity(body.id,opacity.checked?0.35:1);
+    transparent.append(opacity,document.createTextNode('半透明'));
+    options.append(color,transparent); card.append(label,options); bodies.append(card);
   });
   const cases=get('case-list'), combined=select('combined-case'); cases.replaceChildren(); combined.replaceChildren();
   info.cases.forEach(item=>{
