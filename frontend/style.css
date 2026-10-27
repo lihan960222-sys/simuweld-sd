@@ -16,7 +16,8 @@ header > button { margin-left: auto; }
 .brand strong { font-weight: 650; letter-spacing: .5px; }
 .brand small { display: block; font-size: 11px; color: #778997; margin-top: 3px; letter-spacing: 2px; }
 .brand-icon { display: grid; place-items: center; background: #147d88; color: #fff; width: 40px; height: 40px; font-size: 17px; border-radius: 11px; font-weight: 700; }
-main { display: grid; grid-template-columns: 245px minmax(350px,1fr) 318px; height: calc(100vh - 76px); min-height: 560px; }
+main { display: grid; grid-template-columns: 245px minmax(350px,1fr) 318px; height: calc(100vh - 104px); min-height: 560px; }
+footer { height: 28px; display: flex; align-items: center; justify-content: center; border-top: 1px solid #dce4ea; background: #fff; color: #718390; font-size: 11px; }
 aside { overflow: auto; background: #f9fbfc; }
 aside.left { border-right: 1px solid #dce4ea; }
 aside.right { border-left: 1px solid #dce4ea; }
@@ -59,8 +60,14 @@ input[type=range] { width: 100%; accent-color: #147d88; margin: 14px 0 0; }
 #viewport { position: absolute; inset: 0; }
 canvas { display: block; width: 100%; height: 100%; outline: none; }
 .view-tools { position: absolute; z-index: 2; display: flex; gap: 5px; top: 17px; left: 18px; right: 18px; flex-wrap: wrap; }
-.view-tools button { background: #ffffffed; border-color: #cbd8e1; color: #355669; font-size: 11px; padding: 7px 10px; }
+.view-tools button { display: grid; place-items: center; width: 44px; height: 42px; padding: 5px; background: #ffffffed; border-color: #cbd8e1; color: #355669; }
 .view-tools button:hover { background: #e1eef0; }
+.view-tools svg { width: 30px; height: 30px; }
+.cube-face { fill: #dce7ee; stroke: #648595; stroke-width: 1.2; stroke-linejoin: round; }
+.cube-face.active { fill: #43b7b7; stroke: #167d88; }
+.fit-corners, .fit-model { stroke: #355669; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.fit-corners { fill: none; }
+.fit-model { fill: #dce7ee; }
 .view-tools label { display: flex; align-items: center; color: #567282; gap: 4px; margin: 0 0 0 auto; font-size: 10px; }
 #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; color: #718896; }
 #empty h1 { font-size: 22px; font-weight: 500; color: #456374; margin: 15px 0 10px; }

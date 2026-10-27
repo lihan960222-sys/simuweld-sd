@@ -4,13 +4,14 @@ import { Viewer, type MeshData } from './viewer';
 interface ModelInfo {
   id: string; filename: string; nodes: number; elements: number; faces: number;
   bodies: {id: number; name: string}[]; cases: {id: number; name: string; initial: boolean}[];
-  follow: string[]; materials: string[]; missing_materials: string[];
 }
 interface Load {
   name: string; faces: number[]; magnitude: number; mode: string; direction: number[]; cases: number[];
   length_unit: string; force_unit: string; pressure_unit: string;
 }
 interface Preview { area: number; force: number[]; face_count: number; centers: number[][]; directions: number[][]; area_unit: string; force_unit: string; }
+
+const cubeIcon = (plane: string) => `<svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><polygon class="cube-face ${plane==='xy'?'active':''}" points="18,5 31,12 18,19 5,12"/><polygon class="cube-face ${plane==='xz'?'active':''}" points="5,12 18,19 18,32 5,25"/><polygon class="cube-face ${plane==='yz'?'active':''}" points="18,19 31,12 31,25 18,32"/></svg>`;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header><div class="brand"><span class="brand-icon">SD</span><div><strong>SIMUWELD SD</strong><small>面载荷编辑</small></div></div><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
@@ -23,9 +24,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div id="model-info" class="model-info">尚未导入模型</div>
       </section>
       <section><div class="section-title"><h2>实体</h2><span id="body-count" class="badge">0</span></div><div id="body-list"><p class="muted">导入后可以分别显示实体。</p></div></section>
-      <details><summary>模型与计算设置</summary><p id="solver-info">导入后显示。</p><p id="material-info"></p><p>导出文件保留原有焊接、材料和求解设置。尚未通过 sfMarc 求解验证。</p></details>
     </aside>
-    <div class="workspace"><div class="view-tools"><button id="fit">适合窗口</button><button data-view="xy">XY 平面</button><button data-view="xz">XZ 平面</button><button data-view="yz">YZ 平面</button><label><input id="edges" type="checkbox">网格边线</label></div>
+    <div class="workspace"><div class="view-tools"><button id="fit" aria-label="适合窗口" title="适合窗口"><svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path class="fit-corners" d="M11 4H4v7m21-7h7v7M4 25v7h7m21-7v7h-7"/><path class="fit-model" d="m18 10 9 5v10l-9 5-9-5V15Zm0 10 9-5m-9 5-9-5m9 5v10"/></svg></button><button data-view="xy" aria-label="XY 平面" title="XY 平面">${cubeIcon('xy')}</button><button data-view="xz" aria-label="XZ 平面" title="XZ 平面">${cubeIcon('xz')}</button><button data-view="yz" aria-label="YZ 平面" title="YZ 平面">${cubeIcon('yz')}</button><label><input id="edges" type="checkbox">网格边线</label></div>
       <div id="viewport"></div><div id="empty"><span class="empty-shape">◇</span><h1>在模型表面定义载荷</h1><p>导入 DAT 文件，点击一个面开始选择。</p></div>
       <div id="busy" hidden><span class="spinner"></span><span id="busy-text">正在读取模型…</span></div>
       <div class="selection-bar"><div><strong id="selected-count">0</strong><span>已选面</span></div><div><strong id="area-info">—</strong><span>表面积</span></div><button id="clear">清空选择</button></div>
@@ -37,14 +37,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="input-row"><label>大小<input id="magnitude" type="number" min="0" step="any" value="1"></label><label>压力单位<select id="pressure-unit"><option>MPa</option><option>kPa</option><option>Pa</option></select></label></div>
         <label>方向<select id="mode"><option value="inward">沿表面法向 · 向内</option><option value="outward">沿表面法向 · 向外</option><option value="manual">手动方向 · 全局坐标</option></select></label>
         <div id="direction" class="input-row" hidden><label>X<input id="dx" type="number" step="any" value="0"></label><label>Y<input id="dy" type="number" step="any" value="0"></label><label>Z<input id="dz" type="number" step="any" value="-1"></label></div>
-        <details class="units" open><summary>模型单位</summary><p class="hint">默认单位制：mm · t · N · MPa</p><div class="input-row"><label>长度<select id="length-unit"><option>mm</option><option>m</option></select></label><label>力<select id="force-unit"><option>N</option><option>kN</option></select></label></div><label class="check"><input id="unit-confirm" type="checkbox">已确认与原模型单位一致</label></details>
+        <details class="units" open><summary>模型单位</summary><p class="hint">默认单位制：mm · t · N · MPa</p><div class="input-row"><label>长度<select id="length-unit"><option>mm</option><option>m</option></select></label><label>力<select id="force-unit"><option>N</option><option>kN</option></select></label></div></details>
         <label>生效阶段<select id="case-mode"><option value="all">全部计算阶段</option><option value="custom">指定阶段</option></select></label>
         <div id="case-list" hidden></div>
         <button id="preview" class="full">预览方向与合力</button><div id="force-info" class="force-info">选面后显示预计合力</div><button id="save-load" class="primary full">保存载荷</button>
       </section>
       <section><div class="section-title"><h2>已保存载荷</h2><span id="load-count" class="badge">0</span></div><div id="load-list"><p class="muted">可以添加多个载荷。</p></div><div id="combined" hidden><label>查看阶段合力<select id="combined-case"></select></label><p id="combined-force"></p><p class="hint">同一阶段重叠面的载荷相加。</p></div></section>
     </aside>
-  </main>`;
+  </main><footer>copyright LH</footer>`;
 
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => get<HTMLInputElement>(id);
@@ -125,7 +125,7 @@ async function showPreview(): Promise<Preview> {
 
 function updateExport() {
   const consistent = loads.every(({spec})=>spec.length_unit===select('length-unit').value && spec.force_unit===select('force-unit').value);
-  get<HTMLButtonElement>('export').disabled = busy || !loads.length || !consistent || !input('unit-confirm').checked;
+  get<HTMLButtonElement>('export').disabled = busy || !loads.length || !consistent;
 }
 function renderLoads() {
   const list = get('load-list'); list.replaceChildren();
@@ -195,9 +195,7 @@ async function importFiles(root: string) {
     label.append(checkbox,document.createTextNode(item.name+(item.initial?'（初始）':''))); cases.append(label);
     if (!item.initial) combined.add(new Option(item.name,String(item.id)));
   });
-  get('solver-info').textContent=info.follow.length ? '法向随动设置：'+info.follow.join('; ') : '原文件没有 FOLLOW FOR；法向预览依据初始几何。';
-  get('material-info').textContent=info.missing_materials.length ? '未选择的材料文件：'+info.missing_materials.join('、')+'。计算时需要原运行环境提供。' : '';
-  input('unit-confirm').checked=false; updateSelection(); renderLoads();
+  updateSelection(); renderLoads();
 }
 
 input('file').onchange=()=>{files=Array.from(input('file').files||[]); if(files[0]) void run('正在读取模型，请稍候…',()=>importFiles(files[0].name));};
@@ -215,9 +213,8 @@ input('angle').onchange=()=>{if(lastSeed!==null) void run('正在更新选择…
 get('clear').onclick=()=>{if(!busy){selected=[];lastSeed=null;editing=null;updateSelection();}};
 select('mode').onchange=()=>{get('direction').hidden=select('mode').value!=='manual';viewer.clearArrows();};
 select('case-mode').onchange=()=>{get('case-list').hidden=select('case-mode').value!=='custom';};
-input('unit-confirm').onchange=updateExport;
 for (const id of ['length-unit','force-unit']) select(id).onchange=()=>{
-  input('unit-confirm').checked=false; updateExport(); viewer.clearArrows();
+  updateExport(); viewer.clearArrows();
   void run('正在按模型单位更新载荷…',async()=>{
     const updated = await Promise.all(loads.map(async load=>{
       const spec = {...load.spec, length_unit:select('length-unit').value, force_unit:select('force-unit').value};
@@ -236,7 +233,6 @@ get('save-load').onclick=()=>{void run('正在保存载荷…',async()=>{
   editing=null; renderLoads();
 });};
 get('export').onclick=()=>{void run('正在生成新文件…',async()=>{
-  if(!input('unit-confirm').checked) throw new Error('请确认模型单位');
   const response=await api('export',{loads:loads.map(load=>load.spec)});
   const url=URL.createObjectURL(await response.blob());const link=document.createElement('a');link.href=url;
   link.download=info!.filename.split('/').pop()!.replace(/\.dat$/i,'')+'_loads.zip';link.click();

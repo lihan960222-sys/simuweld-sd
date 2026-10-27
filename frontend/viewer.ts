@@ -15,6 +15,8 @@ export class Viewer {
   private arrows = new THREE.Group();
   private raycaster = new THREE.Raycaster();
   private origin = new THREE.Vector3();
+  private pivot = new THREE.Vector3();
+  private panShift = new THREE.Vector3();
   private bounds = new THREE.Box3();
   private viewBounds = new THREE.Box3();
   private size = 1;
@@ -54,16 +56,16 @@ export class Viewer {
     }).observe(this.host);
     this.renderer.setAnimationLoop(() => {
       this.controls.update();
-      const shift = this.controls.target;
+      const shift = this.panShift.subVectors(this.controls.target, this.pivot);
       if (shift.lengthSq() > 0) {
-        // 将平移保存在视窗位置，使旋转中心始终位于模型中心。
-        const scale = this.host.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.position.distanceTo(shift));
+        // 将平移保存在视窗位置，使旋转中心保持在可见实体中心。
+        const scale = this.host.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.position.distanceTo(this.controls.target));
         const right = new THREE.Vector3(1,0,0).applyQuaternion(this.camera.quaternion);
         const up = new THREE.Vector3(0,1,0).applyQuaternion(this.camera.quaternion);
         this.viewOffset.x += shift.dot(right) * scale;
         this.viewOffset.y -= shift.dot(up) * scale;
         this.camera.position.sub(shift);
-        shift.set(0,0,0);
+        this.controls.target.copy(this.pivot);
         this.updateViewOffset();
       }
       this.updateClipping();
@@ -73,9 +75,14 @@ export class Viewer {
 
   private createControls() {
     const controls = new TrackballControls(this.camera, this.renderer.domElement);
+    controls.target.copy(this.pivot);
     controls.rotateSpeed = 2.5;
     // 每帧保留 0.9025 的旋转惯性。
     controls.dynamicDampingFactor = 1 - 0.9025 ** 2;
+    // 相机保持在可见模型的包围球之外，限制过度放大和缩小。
+    controls.minDistance = this.size * 0.55;
+    controls.maxDistance = this.size * 20;
+    controls.update();
     return controls;
   }
 
@@ -92,8 +99,6 @@ export class Viewer {
     const box = new THREE.Box3();
     for (let i=0; i<data.points.length; i+=3) box.expandByPoint(new THREE.Vector3(data.points[i], data.points[i+1], data.points[i+2]));
     box.getCenter(this.origin);
-    this.bounds.copy(box).translate(this.origin.clone().negate());
-    this.size = box.getSize(new THREE.Vector3()).length();
     const bodyTriangles = new Map<number, number[]>();
     data.triangle_faces.forEach((face, triangle) => {
       const body = data.body_ids[face];
@@ -117,6 +122,7 @@ export class Viewer {
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
       geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
       const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({vertexColors: true, roughness: 0.72, metalness: 0.08, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1}));
       mesh.userData = {body, faceIds, base: color};
@@ -131,12 +137,21 @@ export class Viewer {
 
   fit(view = 'iso') {
     const directions: Record<string, number[]> = {iso: [1,-1,0.85], xy: [0,0,1], xz: [0,-1,0], yz: [1,0,0]};
+    this.camera.up.set(0, view === 'xy' ? 1 : 0, view === 'xy' ? 0 : 1);
+    this.frame(new THREE.Vector3().fromArray(directions[view]).normalize());
+  }
+
+  private frame(direction: THREE.Vector3) {
+    this.bounds.makeEmpty();
+    for (const mesh of this.meshes) if (mesh.visible) this.bounds.union(mesh.geometry.boundingBox!);
+    if (this.bounds.isEmpty()) return;
+    this.bounds.getCenter(this.pivot);
+    this.size = this.bounds.getSize(new THREE.Vector3()).length();
     this.controls.dispose();
     this.viewOffset.set(0,0);
     this.camera.clearViewOffset();
-    this.camera.up.set(0, view === 'xy' ? 1 : 0, view === 'xy' ? 0 : 1);
-    this.camera.position.fromArray(directions[view]).normalize().multiplyScalar(this.size * 1.65);
-    this.camera.lookAt(0,0,0);
+    this.camera.position.copy(direction).multiplyScalar(this.size * 1.65).add(this.pivot);
+    this.camera.lookAt(this.pivot);
     this.controls = this.createControls();
     this.updateClipping();
   }
@@ -169,7 +184,11 @@ export class Viewer {
     }
   }
 
-  showBody(body: number, visible: boolean) { this.meshes.filter(mesh=>mesh.userData.body===body).forEach(mesh=>mesh.visible=visible); }
+  showBody(body: number, visible: boolean) {
+    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+    this.meshes.filter(mesh=>mesh.userData.body===body).forEach(mesh=>mesh.visible=visible);
+    this.frame(direction);
+  }
   bodyColor(body: number) { return '#'+this.meshes.find(mesh=>mesh.userData.body===body)!.userData.base.getHexString(); }
   setBodyColor(body: number, color: string) {
     this.meshes.find(mesh=>mesh.userData.body===body)!.userData.base.set(color);

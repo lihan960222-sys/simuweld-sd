@@ -90,6 +90,88 @@ test('箭头随实际选中区域面积缩放', async ({page}) => {
   expect(samples[0].length).toBeLessThan(samples[1].length);
 });
 
+test('只显示边缘实体时围绕可见实体中心旋转', async ({page}) => {
+  const initial=await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    const candidates=viewer.meshes.map((mesh:any)=>{
+      mesh.geometry.computeBoundingBox();
+      const box=mesh.geometry.boundingBox;
+      const center=box.getCenter(viewer.origin.clone());
+      return {body:mesh.userData.body,center,ratio:center.length()/box.getSize(center.clone()).length()};
+    }).sort((a:any,b:any)=>b.ratio-a.ratio);
+    const chosen=candidates[0];
+    for(const mesh of viewer.meshes) viewer.showBody(mesh.userData.body,mesh.userData.body===chosen.body);
+    viewer.fit('xy');
+    const box=viewer.meshes.find((mesh:any)=>mesh.visible).geometry.boundingBox;
+    const center=box.getCenter(viewer.origin.clone());
+    return {body:chosen.body,center:center.toArray(),size:box.getSize(center.clone()).length(),target:viewer.controls.target.toArray(),projected:center.project(viewer.camera).toArray()};
+  });
+  const distance=Math.hypot(...initial.target.map((value:number,i:number)=>value-initial.center[i]));
+  expect(distance).toBeLessThan(initial.size*1e-6);
+  expect(Math.hypot(initial.projected[0],initial.projected[1])).toBeLessThan(1e-6);
+  await page.mouse.move(450,380);
+  await page.mouse.down({button:'right'});
+  await page.mouse.move(530,410,{steps:10});
+  await page.mouse.up({button:'right'});
+  const panned=await page.evaluate(async(center)=>{
+    for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);
+    const viewer=(window as any).viewer;
+    return viewer.origin.clone().fromArray(center).project(viewer.camera).toArray();
+  },initial.center);
+  expect(Math.hypot(panned[0],panned[1])).toBeGreaterThan(0.02);
+  await page.mouse.move(500,500);
+  await page.mouse.down();
+  await page.mouse.move(500,180,{steps:20});
+  await page.mouse.up();
+  const result=await page.evaluate(async(center)=>{
+    for(let i=0;i<40;i++) await new Promise(requestAnimationFrame);
+    const viewer=(window as any).viewer;
+    return viewer.origin.clone().fromArray(center).project(viewer.camera).toArray();
+  },initial.center);
+  expect(Math.hypot(result[0]-panned[0],result[1]-panned[1])).toBeLessThan(1e-6);
+  const restored=await page.evaluate(body=>{
+    const viewer=(window as any).viewer;
+    for(const mesh of viewer.meshes) viewer.showBody(mesh.userData.body,false);
+    viewer.fit();
+    viewer.showBody(body,true);
+    const center=viewer.meshes.find((mesh:any)=>mesh.visible).geometry.boundingBox.getCenter(viewer.origin.clone());
+    return {visible:viewer.meshes.filter((mesh:any)=>mesh.visible).length,error:center.distanceTo(viewer.controls.target),camera:viewer.camera.position.toArray()};
+  },initial.body);
+  expect(restored.visible).toBe(1);
+  expect(restored.error).toBeLessThan(initial.size*1e-6);
+  expect(restored.camera.every(Number.isFinite)).toBe(true);
+});
+
+test('滚轮放大达到上限后停止且能够立即缩小', async ({page}) => {
+  await page.evaluate(()=>(window as any).viewer.fit('xy'));
+  await page.mouse.move(500,380);
+  for(let i=0;i<32;i++) {
+    await page.mouse.wheel(0,-120);
+    await page.evaluate(async()=>{for(let j=0;j<2;j++) await new Promise(requestAnimationFrame);});
+  }
+  const limit=await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    return {distance:viewer.camera.position.distanceTo(viewer.controls.target),min:viewer.controls.minDistance,max:viewer.controls.maxDistance};
+  });
+  expect(limit.min).toBeGreaterThan(0);
+  expect(Number.isFinite(limit.max)).toBe(true);
+  expect(limit.distance).toBeCloseTo(limit.min,10);
+  await page.mouse.wheel(0,-120);
+  const stopped=await page.evaluate(async()=>{
+    for(let i=0;i<3;i++) await new Promise(requestAnimationFrame);
+    const viewer=(window as any).viewer;
+    return viewer.camera.position.distanceTo(viewer.controls.target);
+  });
+  expect(stopped).toBeCloseTo(limit.distance,10);
+  await page.mouse.wheel(0,120);
+  const reversed=await page.evaluate(async()=>{
+    for(let i=0;i<3;i++) await new Promise(requestAnimationFrame);
+    const viewer=(window as any).viewer;
+    return viewer.camera.position.distanceTo(viewer.controls.target);
+  });
+  expect(reversed).toBeGreaterThan(stopped);
+});
+
 test('坐标平面与平移、窗口调整后的点击选面', async ({page}) => {
   const planes=await page.evaluate(()=>{
     const viewer=(window as any).viewer;

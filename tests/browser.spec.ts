@@ -8,7 +8,16 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await page.goto('/#token=' + process.env.SFMARC_TEST_TOKEN);
   await expect(page).toHaveTitle('SIMUWELD SD · 面载荷编辑');
   await expect(page.locator('.brand')).toContainText('SIMUWELD SD');
-  await expect(page.locator('footer, .eyebrow, .help, .local')).toHaveCount(0);
+  await expect(page.locator('.eyebrow, .help, .local, #unit-confirm, #solver-info, #material-info')).toHaveCount(0);
+  await expect(page.locator('footer')).toHaveText('copyright LH');
+  await expect(page.locator('.left details')).toHaveCount(0);
+  const viewButtons=page.locator('.view-tools button');
+  await expect(viewButtons).toHaveCount(4);
+  for(const button of await viewButtons.all()) {
+    await expect(button).toHaveText('');
+    await expect(button.locator('svg')).toHaveCount(1);
+    await expect(button).toHaveAttribute('aria-label',/适合窗口|XY 平面|XZ 平面|YZ 平面/);
+  }
   await expect(page.locator('.workspace')).toHaveCSS('background-color','rgb(237, 242, 246)');
   await expect(page.locator('#length-unit')).toHaveValue('mm');
   await expect(page.locator('#force-unit')).toHaveValue('N');
@@ -25,7 +34,6 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await body.getByRole('checkbox',{name:/半透明/}).uncheck();
   for(const plane of ['XY','XZ','YZ']) await page.getByRole('button',{name:plane+' 平面'}).click();
   await page.getByRole('button',{name:'适合窗口'}).click();
-  await page.locator('#unit-confirm').check();
   const canvas = page.locator('canvas');
   const box = (await canvas.boundingBox())!;
   for (const [x, y] of [[0.5,0.5],[0.4,0.5],[0.6,0.5],[0.5,0.6],[0.3,0.4]]) {
@@ -48,13 +56,14 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(page.locator('#force-info')).toContainText('N');
   await page.locator('#save-load').click();
   await expect(page.locator('#load-list')).toContainText('载荷 1');
+  await expect(page.locator('#export')).toBeEnabled();
   await page.locator('#length-unit').selectOption('m');
   await expect(page.locator('#busy')).toBeHidden();
   await expect(page.locator('#length-unit')).toHaveValue('m');
-  await expect(page.locator('#unit-confirm')).not.toBeChecked();
+  await expect(page.locator('#export')).toBeEnabled();
   await page.locator('#length-unit').selectOption('mm');
   await expect(page.locator('#busy')).toBeHidden();
-  await expect(page.locator('#unit-confirm')).not.toBeChecked();
+  await expect(page.locator('#export')).toBeEnabled();
   await page.getByRole('button', {name: '编辑', exact: true}).click();
   await expect(page.locator('#busy')).toBeHidden();
   await expect(page.locator('#length-unit')).toHaveValue('mm');
@@ -62,7 +71,6 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await page.locator('#save-load').click();
   await expect(page.locator('#load-list')).toContainText('夹紧压力');
   await expect(page.locator('#load-count')).toHaveText('1');
-  await page.locator('#unit-confirm').check();
   const download = page.waitForEvent('download');
   const exportRequest = page.waitForRequest(request => request.url().endsWith('/api/export'));
   await page.locator('#export').click();
