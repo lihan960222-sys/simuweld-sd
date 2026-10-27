@@ -4,6 +4,7 @@ export interface HeatParameters {
   conical_gaussian_parameter: number; volume_heat_fraction: number;
   disc_radius: number; surface_depth: number; disc_gaussian_parameter: number;
 }
+export interface HeatProfile { name: string; parameters: HeatParameters; }
 
 const fields: [keyof HeatParameters,string,number,number,number?][]=[
   ['power_w','功率（W）',35,0],['velocity','速度（mm/s）',120,0],['efficiency','效率（0–1）',0.8,0,1],
@@ -18,7 +19,7 @@ export class HeatSettings {
   private svg: SVGSVGElement;
 
   constructor(changed: ()=>void) {
-    this.section.innerHTML='<h2>热源参数</h2><div class="heat-fields"></div><p class="hint">初始数值可编辑；全部焊路使用此组参数。</p><svg id="heat-diagram" viewBox="0 0 300 250" role="img" aria-label="圆锥热源尺寸示意图"></svg><p id="heat-error" role="status"></p>';
+    this.section.innerHTML='<h2>热源</h2><div class="heat-fields"></div><svg id="heat-diagram" viewBox="0 0 300 250" role="img" aria-label="圆锥热源尺寸示意图"></svg><p id="heat-error" role="status"></p>';
     this.svg=this.section.querySelector('svg')!;
     for(const [key,label,value,min,max] of fields) {
       const row=document.createElement('label');row.textContent=label;
@@ -29,10 +30,14 @@ export class HeatSettings {
     this.draw();
   }
 
-  get valid() { return [...this.section.querySelectorAll('input')].every(input=>input.checkValidity()); }
+  get valid() { return [...this.section.querySelectorAll<HTMLInputElement>('.heat-fields input')].every(input=>input.checkValidity()); }
   get value(): HeatParameters {
     if(!this.valid) throw new Error('请填写有效的热源参数。');
     return Object.fromEntries(fields.map(([key])=>[key,this.section.querySelector<HTMLInputElement>('#heat-'+key)!.valueAsNumber])) as unknown as HeatParameters;
+  }
+  setValue(value?: HeatParameters) {
+    for(const [key,,initial] of fields) this.section.querySelector<HTMLInputElement>('#heat-'+key)!.value=String(value?value[key]:initial);
+    this.draw();
   }
 
   private draw() {

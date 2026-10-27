@@ -34,10 +34,10 @@ def test_import_reference_points_and_generate_independent_script(client):
     assert path["points"][281]["xyz"][2] == 992.549
     points = [point["xyz"] for point in path["points"][13:282]][::-1]
     exported = client.post("/api/weld-script", json={
-        "process": "Process-1", "robot": "Robot-1", "heat_source": "Laser-1",
-        "heat": HEAT, "orientation": [0, 0, 2], "paths": [
-            {"name": "完整焊路", "points": points, "pause_after": 2.5},
-            {"name": "反向焊路", "points": points[::-1], "pause_after": 0},
+        "process": "Process-1", "robot": "Robot-1", "heats": [{"name": "Laser-1", "parameters": HEAT}],
+        "orientation": [0, 0, 2], "paths": [
+            {"name": "完整焊路", "points": points, "pause_after": 2.5, "heat_source": "Laser-1"},
+            {"name": "反向焊路", "points": points[::-1], "pause_after": 0, "heat_source": "Laser-1"},
         ],
     })
     assert exported.status_code == 200, exported.text
@@ -88,9 +88,9 @@ def test_rejects_ambiguous_or_invalid_csv(client, content):
 
 
 def test_script_rejects_invalid_plan_and_escapes_names(client):
-    payload = {"process": "Process-1", "robot": "Robot-1", "heat_source": "Laser-1",
-               "heat": HEAT, "orientation": [0, 0, 1],
-               "paths": [{"name": "引号'路径", "points": [[0, 0, 0], [1, 0, 0]], "pause_after": 3}]}
+    payload = {"process": "Process-1", "robot": "Robot-1", "heats": [{"name": "Laser-1", "parameters": HEAT}],
+               "orientation": [0, 0, 1],
+               "paths": [{"name": "引号'路径", "points": [[0, 0, 0], [1, 0, 0]], "pause_after": 3, "heat_source": "Laser-1"}]}
     result = client.post("/api/weld-script", json=payload)
     assert result.status_code == 200, result.text
     namespace = {"__name__": "generated_script_test"}
@@ -113,23 +113,56 @@ def test_welding_api_uses_session_guard(client):
 
 
 def test_heat_parameters_are_exported_and_validated(client):
-    payload = {"process": "Process-1", "robot": "Robot-1", "heat_source": "Web-Laser",
-               "heat": dict(HEAT), "paths": [{"name": "path", "points": [[0, 0, 0], [10, 0, 0]], "pause_after": 0.2}]}
+    payload = {"process": "Process-1", "robot": "Robot-1", "heats": [{"name": "Web-Laser", "parameters": dict(HEAT)}],
+               "paths": [{"name": "path", "points": [[0, 0, 0], [10, 0, 0]], "pause_after": 0.2, "heat_source": "Web-Laser"}]}
     response = client.post("/api/weld-script", json=payload)
     assert response.status_code == 200, response.text
     namespace = {"__name__": "generated_script_test"}
     exec(compile(response.text, "heat.py", "exec"), namespace)
     namespace["validate_plan"]()
-    assert namespace["HEAT"] == HEAT
-    payload["heat"]["efficiency"] = 0
+    assert namespace["HEATS"] == {"Web-Laser": HEAT}
+    payload["heats"][0]["parameters"]["efficiency"] = 0
     assert client.post("/api/weld-script", json=payload).status_code == 200
-    namespace["HEAT"]["efficiency"] = 5
+    namespace["HEATS"]["Web-Laser"]["efficiency"] = 5
     with pytest.raises(ValueError, match="热源"):
         namespace["validate_plan"]()
     for key, value in (("efficiency", 1.1), ("power_w", 0), ("velocity", -2), ("conical_depth", 0),
                        ("conical_gaussian_parameter", 4), ("volume_heat_fraction", -1)):
-        payload["heat"] = {**HEAT, key: value}
+        payload["heats"][0]["parameters"] = {**HEAT, key: value}
         assert client.post("/api/weld-script", json=payload).status_code == 422
+
+
+def test_multiple_heat_profiles_follow_each_path_and_reject_missing_references(client):
+    heats = [{"name": "Laser-A", "parameters": dict(HEAT)},
+             {"name": "Laser-B", "parameters": {**HEAT, "power_w": 250, "velocity": 25, "conical_depth": 0.8}}]
+    payload = {"process": "Process-1", "robot": "Robot-1", "heats": heats, "paths": [
+        {"name": "焊路-A", "points": [[0, 0, 0], [10, 0, 0]], "pause_after": 2, "heat_source": "Laser-A"},
+        {"name": "焊路-B", "points": [[10, 0, 0], [20, 0, 0]], "pause_after": 3, "heat_source": "Laser-B"},
+    ]}
+    response = client.post("/api/weld-script", json=payload)
+    assert response.status_code == 200, response.text
+    namespace = {"__name__": "generated_script_test"}
+    exec(compile(response.text, "multiple_heats.py", "exec"), namespace)
+    namespace["validate_plan"]()
+    assert namespace["HEATS"] == {profile["name"]: profile["parameters"] for profile in heats}
+    assert [path["heat_source"] for path in namespace["PATHS"]] == ["Laser-A", "Laser-B"]
+    assert namespace["HEATS"]["Laser-A"]["velocity"] == 120
+    assert namespace["HEATS"]["Laser-B"]["velocity"] == 25
+    assert [path["pause_after"] for path in namespace["PATHS"]] == [2, 3]
+    del namespace["HEATS"]["Laser-B"]["power_w"]
+    with pytest.raises(ValueError, match="热源参数"):
+        namespace["validate_plan"]()
+    namespace["HEATS"]["Laser-B"]["power_w"] = 250
+    namespace["PATHS"][1]["heat_source"] = "missing"
+    with pytest.raises(ValueError, match="热源"):
+        namespace["validate_plan"]()
+    payload["paths"][1]["heat_source"] = "missing"
+    assert client.post("/api/weld-script", json=payload).status_code == 422
+    payload["paths"][1]["heat_source"] = "Laser-B"
+    payload["heats"][1]["name"] = "Laser-A"
+    assert client.post("/api/weld-script", json=payload).status_code == 422
+    payload["heats"] = []
+    assert client.post("/api/weld-script", json=payload).status_code == 422
 
 
 def test_reference_weldid_pointid_columns(client):

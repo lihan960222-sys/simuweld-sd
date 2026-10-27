@@ -11,7 +11,9 @@ export interface PathData { id: number; points: number[][]; }
 export class Viewer {
   private renderer = new THREE.WebGLRenderer({antialias: true});
   private scene = new THREE.Scene();
+  private pathScene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(40, 1, 0.001, 10000);
+  private pathCamera = new THREE.PerspectiveCamera();
   private controls: TrackballControls;
   private orientation = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   private orientationRotation = new THREE.Quaternion(0,0,0,0);
@@ -19,13 +21,13 @@ export class Viewer {
   private models = new THREE.Group();
   private arrows = new THREE.Group();
   private paths = new THREE.Group();
+  private hoverPoint = new THREE.Points(new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute([0,0,0],3)),new THREE.PointsMaterial({color:0xffe89a,size:14,sizeAttenuation:false,depthTest:false,depthWrite:false,transparent:true}));
   private torch = new THREE.Group();
   private heat = new THREE.Group();
   private weldLight = new THREE.PointLight(0xffa84c,0,0,0);
   private heatExtent = 0;
   private pathBounds = new THREE.Box3();
   private pathFocus = new THREE.Box3();
-  private pathsFocused = false;
   private pathPick: ((path: number, point: number)=>void) | null = null;
   private raycaster = new THREE.Raycaster();
   private origin = new THREE.Vector3();
@@ -42,6 +44,7 @@ export class Viewer {
 
   constructor(private host: HTMLElement, onPick: (face: number) => void) {
     this.scene.background = new THREE.Color(0xedf2f6);
+    this.renderer.autoClear=false;
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.host.append(this.renderer.domElement);
@@ -58,26 +61,38 @@ export class Viewer {
     this.scene.add(new THREE.HemisphereLight(0xf1f6ff, 0x617385, 2.5));
     const light = new THREE.DirectionalLight(0xffffff, 3);
     light.position.set(3, -4, 5);
-    this.scene.add(light, this.models, this.arrows, this.paths, this.torch);
+    this.scene.add(light, this.models, this.arrows, this.torch);
+    this.pathScene.add(this.paths,this.hoverPoint);
+    const glow=document.createElement('canvas');glow.width=64;glow.height=64;
+    const context=glow.getContext('2d')!,gradient=context.createRadialGradient(32,32,2,32,32,32);
+    gradient.addColorStop(0,'#ffffff');gradient.addColorStop(.25,'#ffffff');gradient.addColorStop(1,'#ffffff00');
+    context.fillStyle=gradient;context.fillRect(0,0,64,64);
+    this.hoverPoint.material.map=new THREE.CanvasTexture(glow);this.hoverPoint.renderOrder=22;this.hoverPoint.visible=false;
     this.torch.visible=false;
     let down: [number, number] = [0, 0];
-    this.renderer.domElement.addEventListener('pointerdown', event => { down = [event.clientX, event.clientY]; });
+    this.renderer.domElement.addEventListener('pointerdown', event => { down = [event.clientX, event.clientY];this.clearPathHover(); });
+    this.renderer.domElement.addEventListener('pointermove',event=>{
+      if(event.buttons) {this.clearPathHover();return;}
+      const hit=this.pathPointAt(event.clientX,event.clientY);
+      this.hoverPoint.visible=!!hit;this.renderer.domElement.style.cursor=hit?'pointer':'';
+      if(hit) {this.hoverPoint.position.copy(hit.position);this.hoverPoint.userData={path:hit.path,point:hit.point};}
+    });
+    this.renderer.domElement.addEventListener('pointerleave',()=>this.clearPathHover());
+    this.renderer.domElement.addEventListener('wheel',event=>{
+      this.clearPathHover();
+      const distance=this.camera.position.distanceTo(this.controls.target);
+      if(this.camera.zoom===1 && (event.deltaY>=0 || distance>this.controls.minDistance*(1+1e-8))) return;
+      event.preventDefault();event.stopImmediatePropagation();
+      const unit=event.deltaMode===2?.025:event.deltaMode===1?.01:.00025;
+      // 到达模型外侧后，通过视角放大继续观察，滚轮增速降为五分之一。
+      this.camera.zoom=Math.max(1,this.camera.zoom*Math.exp(-event.deltaY*unit*this.controls.zoomSpeed*.2/this.controls.dynamicDampingFactor));
+      this.controls.panSpeed=.3/this.camera.zoom;this.camera.updateProjectionMatrix();
+    },{capture:true,passive:false});
     this.renderer.domElement.addEventListener('pointerup', event => {
       if (event.button !== 0 || Math.hypot(event.clientX-down[0], event.clientY-down[1]) > 4) return;
       const rect = this.renderer.domElement.getBoundingClientRect();
       if (this.paths.visible && this.pathPick) {
-        let closest: {path: number; point: number; distance: number; active: boolean} | null = null;
-        const projected = new THREE.Vector3();
-        for (const object of this.paths.children) if (object instanceof THREE.Points && object.userData.path != null) {
-          const positions = object.geometry.getAttribute('position');
-          for (let index=0; index<positions.count; index++) {
-            projected.fromBufferAttribute(positions,index).project(this.camera);
-            if (Math.abs(projected.z)>1) continue;
-            const distance = Math.hypot((projected.x+1)*rect.width/2-(event.clientX-rect.left),(1-projected.y)*rect.height/2-(event.clientY-rect.top));
-            const active=object.userData.active as boolean;
-            if (distance<=8 && (!closest || (active && !closest.active) || (active===closest.active && distance<closest.distance))) closest={path:object.userData.path,point:index,distance,active};
-          }
-        }
+        const closest=this.pathPointAt(event.clientX,event.clientY);
         if (closest) this.pathPick(closest.path,closest.point);
         return;
       }
@@ -97,7 +112,7 @@ export class Viewer {
       const shift = this.panShift.subVectors(this.controls.target, this.pivot);
       if (shift.lengthSq() > 0) {
         // 将平移保存在视窗位置，使旋转中心保持在可见实体中心。
-        const scale = this.host.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.position.distanceTo(this.controls.target));
+        const scale = this.camera.zoom*this.host.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.position.distanceTo(this.controls.target));
         const right = new THREE.Vector3(1,0,0).applyQuaternion(this.camera.quaternion);
         const up = new THREE.Vector3(0,1,0).applyQuaternion(this.camera.quaternion);
         this.viewOffset.x += shift.dot(right) * scale;
@@ -107,9 +122,41 @@ export class Viewer {
         this.updateViewOffset();
       }
       this.updateClipping();
+      this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
+      if(this.paths.visible && !this.pathBounds.isEmpty()) {
+        this.updatePathCamera();this.renderer.render(this.pathScene,this.pathCamera);
+      }
       this.updateOrientation();
     });
+  }
+
+  private clearPathHover() { this.hoverPoint.visible=false;this.renderer.domElement.style.cursor=''; }
+
+  private pathPointAt(clientX: number,clientY: number) {
+    if(!this.paths.visible || !this.pathPick || this.pathBounds.isEmpty()) return null;
+    this.updatePathCamera();
+    const rect=this.renderer.domElement.getBoundingClientRect(),projected=new THREE.Vector3(),position=new THREE.Vector3();
+    let closest: {path:number;point:number;distance:number;active:boolean;position:THREE.Vector3} | null=null;
+    for(const object of this.paths.children) if(object instanceof THREE.Points && object.userData.path!=null) {
+      const positions=object.geometry.getAttribute('position');
+      for(let index=0;index<positions.count;index++) {
+        position.fromBufferAttribute(positions,index);projected.copy(position).project(this.pathCamera);
+        if(Math.abs(projected.z)>1) continue;
+        const distance=Math.hypot((projected.x+1)*rect.width/2-(clientX-rect.left),(1-projected.y)*rect.height/2-(clientY-rect.top));
+        const active=object.userData.active as boolean;
+        if(distance<=8 && (!closest || (active && !closest.active) || (active===closest.active && distance<closest.distance))) closest={path:object.userData.path,point:index,distance,active,position:position.clone()};
+      }
+    }
+    return closest;
+  }
+
+  private updatePathCamera() {
+    this.camera.updateMatrixWorld();this.pathCamera.copy(this.camera);
+    const box=this.pathBounds.clone().applyMatrix4(this.camera.matrixWorldInverse),margin=Math.max(this.size*.05,1e-9);
+    this.pathCamera.near=Math.max(1e-12,-box.max.z-margin);
+    this.pathCamera.far=Math.max(this.pathCamera.near*2,-box.min.z+margin);
+    this.pathCamera.updateProjectionMatrix();
   }
 
   private updateOrientation() {
@@ -140,9 +187,10 @@ export class Viewer {
     controls.rotateSpeed = 2.5;
     // 每帧保留 0.9025 的旋转惯性。
     controls.dynamicDampingFactor = 1 - 0.9025 ** 2;
-    // 相机保持在可见模型的包围球之外，限制过度放大和缩小。
+    // 保留模型外侧的观察位置；近距离放大由 camera.zoom 继续完成。
     controls.minDistance = this.size * 0.55;
     controls.maxDistance = this.size * 20;
+    controls.panSpeed=.3/this.camera.zoom;
     controls.update();
     return controls;
   }
@@ -154,9 +202,10 @@ export class Viewer {
 
   load(data: MeshData) {
     this.hideWeldPreview();
+    this.clearPathHover();
     this.clearGroup(this.models);
     this.clearArrows();
-    this.clearGroup(this.paths); this.pathBounds.makeEmpty(); this.pathsFocused=false;
+    this.clearGroup(this.paths); this.pathBounds.makeEmpty();
     this.meshes = [];
     this.selected.clear();
     const box = new THREE.Box3();
@@ -214,6 +263,7 @@ export class Viewer {
   }
 
   fit(view = 'iso') {
+    this.camera.zoom=1;this.camera.updateProjectionMatrix();this.clearPathHover();
     const directions: Record<string, number[]> = {iso: [1,-1,0.85], xy: [0,0,1], xz: [0,-1,0], yz: [1,0,0]};
     this.camera.up.set(0, view === 'xy' ? 1 : 0, view === 'xy' ? 0 : 1);
     this.frame(new THREE.Vector3().fromArray(directions[view]).normalize());
@@ -231,8 +281,8 @@ export class Viewer {
     this.updateClipping();
   }
 
-  private frame(direction: THREE.Vector3) {
-    this.updateBounds();
+  private frame(direction: THREE.Vector3,pathsOnly=false) {
+    if(pathsOnly) this.bounds.copy(this.pathFocus.isEmpty()?this.pathBounds:this.pathFocus);else this.updateBounds();
     if (this.bounds.isEmpty()) return;
     this.bounds.getCenter(this.pivot);
     this.size = Math.max(this.bounds.getSize(new THREE.Vector3()).length(),1e-9);
@@ -248,7 +298,7 @@ export class Viewer {
   private updateBounds() {
     this.bounds.makeEmpty();
     for (const mesh of this.meshes) if (mesh.visible) this.bounds.union(mesh.geometry.boundingBox!);
-    if (this.paths.visible && (this.pathsFocused || this.bounds.isEmpty())) this.bounds.copy(this.pathFocus.isEmpty()?this.pathBounds:this.pathFocus);
+    if (this.paths.visible && this.bounds.isEmpty()) this.bounds.copy(this.pathBounds);
   }
 
   private updateClipping() {
@@ -256,7 +306,6 @@ export class Viewer {
     this.camera.updateMatrixWorld();
     this.viewBounds.copy(this.bounds);
     for (const mesh of this.meshes) if (mesh.visible) this.viewBounds.union(mesh.geometry.boundingBox!);
-    if (this.paths.visible) this.viewBounds.union(this.pathBounds);
     if (this.torch.visible) {
       const radius=new THREE.Vector3().setScalar(this.heatExtent);
       this.viewBounds.union(new THREE.Box3(this.torch.position.clone().sub(radius),this.torch.position.clone().add(radius)));
@@ -344,6 +393,7 @@ export class Viewer {
   }
   hideWeldPreview() { this.torch.visible=false; }
   setPaths(data: PathData[], selected: number, range: [number,number], onPick: (path: number, point: number)=>void) {
+    this.clearPathHover();
     this.clearGroup(this.paths); this.pathBounds.makeEmpty(); this.pathFocus.makeEmpty(); this.pathPick=onPick;
     if (!this.meshes.length) {
       const box=new THREE.Box3();
@@ -375,15 +425,12 @@ export class Viewer {
   }
   showPaths(visible: boolean) {
     this.paths.visible=visible;
-    if (!visible && this.pathsFocused && this.meshes.length) {
-      this.pathsFocused=false;
-      this.frame(this.camera.position.clone().sub(this.controls.target).normalize());
-    }
+    if(!visible) this.clearPathHover();
   }
   fitPaths() {
     if(this.pathBounds.isEmpty()) return;
-    this.pathsFocused=true; this.paths.visible=true;
-    this.frame(this.camera.position.clone().sub(this.controls.target).normalize());
+    this.paths.visible=true;this.camera.zoom=1;this.camera.updateProjectionMatrix();
+    this.frame(this.camera.position.clone().sub(this.controls.target).normalize(),true);
   }
   private clearGroup(group: THREE.Group) {
     group.traverse(object => {

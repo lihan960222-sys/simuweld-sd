@@ -19,6 +19,7 @@ class WeldPath(BaseModel):
     name: Name
     points: list[Point] = Field(min_length=2, max_length=100000)
     pause_after: float = Field(ge=0)
+    heat_source: Name
 
     @field_validator("points")
     @classmethod
@@ -42,12 +43,17 @@ class HeatParameters(BaseModel):
     disc_gaussian_parameter: float = Field(ge=0, le=3)
 
 
+class HeatProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    name: Name
+    parameters: HeatParameters
+
+
 class WeldPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     process: Name
     robot: Name
-    heat_source: Name
-    heat: HeatParameters
+    heats: list[HeatProfile] = Field(min_length=1, max_length=1000)
     orientation: Point = (0, 0, 1)
     paths: list[WeldPath] = Field(min_length=1, max_length=1000)
 
@@ -61,6 +67,12 @@ class WeldPlan(BaseModel):
 
     @model_validator(mode="after")
     def check_paths(self):
+        heat_names = {heat.name for heat in self.heats}
+        if len(heat_names) != len(self.heats):
+            raise ValueError("热源名称不能重复")
+        missing = {path.heat_source for path in self.paths} - heat_names
+        if missing:
+            raise ValueError("焊路引用的热源不存在：" + "、".join(sorted(missing)))
         if len({path.name for path in self.paths}) != len(self.paths):
             raise ValueError("焊路名称不能重复")
         if sum(len(path.points) for path in self.paths) > 1000000:
@@ -121,10 +133,11 @@ def read_paths(data: bytes, filename: str, unit: str):
 
 def generate_script(plan: WeldPlan):
     paths = [{"name": path.name, "points": [list(point) for point in path.points],
-              "pause_after": path.pause_after, "length_mm": path_length(path.points)} for path in plan.paths]
+              "pause_after": path.pause_after, "length_mm": path_length(path.points),
+              "heat_source": path.heat_source} for path in plan.paths]
     constants = {"PROCESS_NAME": plan.process, "ROBOT_NAME": plan.robot,
-                 "HEAT_SOURCE_PARAMETER_NAME": plan.heat_source, "ORIENTATION": plan.orientation,
-                 "HEAT": plan.heat.model_dump()}
+                 "ORIENTATION": plan.orientation,
+                 "HEATS": {heat.name: heat.parameters.model_dump() for heat in plan.heats}}
     source = "import math\n\n" + "\n".join(f"{key} = {value!r}" for key, value in constants.items())
     source += "\nPATHS = [\n" + "".join(f"    {path!r},\n" for path in paths) + "]\n"
     return source + SCRIPT_BODY

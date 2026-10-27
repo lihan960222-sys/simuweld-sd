@@ -7,7 +7,8 @@ test('几何背景、热源比例图、移动预览与完整参数导出',async(
   await expect.poll(()=>page.locator('.brand-icon').evaluate(element=>(element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth>0)).toBe(true);
   expect((await page.request.get('/icon.svg')).ok()).toBe(true);
   for(const extension of ['inp','bdf','stp']) {
-    await page.locator('#geometry-file').setInputFiles('work/geometry-tests/two_blocks.'+extension);
+    await page.locator('#open-model').click();
+    await page.locator('#file').setInputFiles('work/geometry-tests/two_blocks.'+extension);
     await expect(page.locator('#model-info')).toContainText('two_blocks.'+extension);
     await expect(page.locator('#body-list .body-card')).toHaveCount(2);
     await expect(page.locator('#busy')).toBeHidden();
@@ -24,6 +25,7 @@ test('几何背景、热源比例图、移动预览与完整参数导出',async(
   await page.locator('#heat-power_w').fill('250');
   await page.locator('#heat-velocity').fill('50');
   await page.locator('#heat-efficiency').fill('0.7');
+  await page.locator('#weld-heat-save').click();
   await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
   await expect(page.locator('#weld-source-info')).toContainText('295');
   await page.locator('#weld-start').selectOption('13');await page.locator('#weld-end').selectOption('281');
@@ -58,9 +60,12 @@ test('几何背景、热源比例图、移动预览与完整参数导出',async(
   await expect(page.locator('#export')).toBeDisabled();
   await expect(page.locator('#weld-play')).toBeDisabled();
   await page.locator('#heat-efficiency').fill('0.7');
+  await page.locator('#weld-heat-save').click();
   const request=page.waitForRequest(request=>request.url().endsWith('/api/weld-script'));
   const download=page.waitForEvent('download');await page.locator('#export').click();
-  const heat=(await request).postDataJSON().heat;
+  const payload=(await request).postDataJSON();
+  const heat=payload.heats[0].parameters;
+  expect(payload.paths[0].heat_source).toBe(payload.heats[0].name);
   expect(heat.power_w).toBe(250);expect(heat.velocity).toBe(50);expect(heat.efficiency).toBe(0.7);
   expect(heat.conical_depth).toBe(0.8);await download;
   for(const width of [960,768,430]) {
@@ -77,6 +82,7 @@ test('CSV 焊路按范围、顺序和停止时间导出脚本', async ({page}) =
   await page.getByRole('button',{name:'生成焊路',exact:true}).click();
   await expect(page.locator('#export')).toHaveText('导出 Python 脚本 ↗');
   await expect(page.locator('#export')).toBeDisabled();
+  await page.locator('#weld-heat-save').click();
   await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
   await expect(page.locator('#weld-source-info')).toContainText('295');
   await expect(page.locator('#empty')).toBeHidden();
@@ -186,6 +192,78 @@ async function frameSum(page: Page) {
     resolve(pixels.reduce((sum,value)=>sum+value,0));
   })));
 }
+
+test('模型与 CSV 在模块切换后保留，焊路分别使用不同热源',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await page.locator('#open-model').click();
+  await page.locator('#file').setInputFiles('work/elemtype7_tension.dat');
+  await expect(page.locator('#model-info')).toContainText('elemtype7_tension.dat');
+  await expect(page.locator('#busy')).toBeHidden();
+  await page.locator('#edges').check();
+  await page.getByRole('button',{name:'面载荷',exact:true}).click();
+  await page.locator('[data-view=xy]').click();
+  const before=await frameSum(page);
+  await page.getByRole('button',{name:'生成焊路',exact:true}).click();
+  await expect(page.locator('#weld-locate')).toHaveCount(0);
+  await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
+  await expect(page.locator('#weld-source-info')).toContainText('295');
+  await expect.poll(()=>frameSum(page)).toBe(before);
+  await page.locator('#weld-heat-name').fill('Laser-A');
+  await page.locator('#heat-velocity').fill('50');
+  await page.locator('#weld-heat-save').click();
+  await page.locator('#weld-start').selectOption('13');await page.locator('#weld-end').selectOption('281');
+  await page.locator('#weld-name').fill('第一条焊路');await page.locator('#weld-pause').fill('1');await page.locator('#weld-add').click();
+  await page.locator('#weld-heat-new').click();
+  await page.locator('#weld-heat-name').fill('Laser-B');
+  await page.locator('#heat-power_w').fill('250');await page.locator('#heat-velocity').fill('25');await page.locator('#heat-conical_depth').fill('0.8');
+  await page.locator('#weld-heat-save').click();
+  await page.locator('#weld-name').fill('第二条焊路');await page.locator('#weld-pause').fill('2');await page.locator('#weld-add').click();
+  await expect(page.locator('#weld-list .weld-card')).toHaveCount(2);
+  await expect(page.getByLabel('第一条焊路 热源',{exact:true})).toHaveValue('Laser-A');
+  await expect(page.getByLabel('第二条焊路 热源',{exact:true})).toHaveValue('Laser-B');
+  await page.locator('#weld-heat-name').fill('');await page.locator('#heat-conical_depth').fill('0.5');
+  await page.locator('#weld-heat-cancel').click();
+  await expect(page.locator('#weld-heat-name')).toHaveValue('Laser-B');
+  await expect(page.locator('#heat-diagram')).toContainText('0.8 mm');
+  await page.locator('#weld-heat-name').fill('Laser-B-renamed');await page.locator('#weld-heat-save').click();
+  await expect(page.getByLabel('第二条焊路 热源',{exact:true})).toHaveValue('Laser-B-renamed');
+  await page.locator('#weld-heat-name').fill('Laser-B');await page.locator('#weld-heat-save').click();
+  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:'编辑',exact:true}).click();
+  await page.getByLabel('第一条焊路 热源',{exact:true}).selectOption('Laser-B');
+  await expect(page.locator('#weld-entry-heat')).toHaveValue('Laser-B');
+  await page.locator('#weld-pause').fill('1');await page.locator('#weld-add').click();
+  await expect(page.getByLabel('第一条焊路 热源',{exact:true})).toHaveValue('Laser-B');
+  await page.getByLabel('第一条焊路 热源',{exact:true}).selectOption('Laser-A');
+  for(const module of ['面载荷','模型','面载荷']) {
+    await page.getByRole('button',{name:module,exact:true}).click();
+    await page.getByRole('button',{name:'生成焊路',exact:true}).click();
+    await expect(page.locator('#weld-source-info')).toContainText('295');
+    await expect(page.locator('#weld-start')).toHaveValue('13');
+    await expect(page.locator('#weld-end')).toHaveValue('281');
+    await expect(page.locator('#weld-list .weld-card')).toHaveCount(2);
+    await expect(page.locator('#weld-heat-profile option')).toHaveCount(2);
+    await expect.poll(()=>frameSum(page)).toBe(before);
+  }
+  await page.locator('[data-view=xy]').click();
+  await expect.poll(()=>frameSum(page)).toBe(before);
+  await page.locator('#weld-reset').click();
+  const expectedDuration=205.4898146957904/50+1+205.4898146957904/25+2;
+  await expect(page.locator('#weld-time')).toContainText(expectedDuration.toFixed(3)+' s');
+  await page.locator('#weld-progress').scrollIntoViewIfNeeded();
+  const bounds=(await page.locator('#weld-progress').boundingBox())!;
+  await page.mouse.click(bounds.x+bounds.width*.7,bounds.y+bounds.height/2);
+  await expect(page.locator('#weld-time')).toContainText('Laser-B');
+  const download=page.waitForEvent('download'),request=page.waitForRequest(request=>request.url().endsWith('/api/weld-script'));
+  await page.locator('#export').click();const payload=(await request).postDataJSON();await download;
+  expect(payload.heats.map((heat:any)=>heat.name)).toEqual(['Laser-A','Laser-B']);
+  expect(payload.heats.map((heat:any)=>heat.parameters.velocity)).toEqual([50,25]);
+  expect(payload.paths.map((path:any)=>path.heat_source)).toEqual(['Laser-A','Laser-B']);
+  await page.getByLabel('第二条焊路 热源',{exact:true}).selectOption('Laser-A');
+  await page.locator('#weld-reset').click();
+  await expect(page.locator('#weld-time')).toContainText((205.4898146957904/50*2+3).toFixed(3)+' s');
+  expect(errors).toEqual([]);
+});
 
 test('真实模型导入、选面、手动方向、载荷保存和下载', async ({page}) => {
   const errors: string[] = [];

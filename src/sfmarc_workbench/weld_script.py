@@ -2,16 +2,25 @@ SCRIPT_BODY = '''
 
 
 def validate_plan():
-    for key, value in HEAT.items():
-        zero_allowed = key in ("efficiency", "conical_lower_radius", "volume_heat_fraction", "conical_gaussian_parameter", "disc_gaussian_parameter")
-        maximum = 1 if key in ("efficiency", "volume_heat_fraction") else 3 if key.endswith("gaussian_parameter") else float("inf")
-        if not math.isfinite(value) or not 0 <= value <= maximum or (value == 0 and not zero_allowed):
-            raise ValueError("热源参数无效：{}".format(key))
+    if not HEATS:
+        raise ValueError("热源列表不能为空。")
+    heat_fields = {"power_w", "velocity", "efficiency", "conical_upper_radius", "conical_lower_radius", "conical_depth",
+                   "conical_gaussian_parameter", "volume_heat_fraction", "disc_radius", "surface_depth", "disc_gaussian_parameter"}
+    for name, parameters in HEATS.items():
+        if set(parameters) != heat_fields:
+            raise ValueError("热源参数不完整或包含未知参数：{}".format(name))
+        for key, value in parameters.items():
+            zero_allowed = key in ("efficiency", "conical_lower_radius", "volume_heat_fraction", "conical_gaussian_parameter", "disc_gaussian_parameter")
+            maximum = 1 if key in ("efficiency", "volume_heat_fraction") else 3 if key.endswith("gaussian_parameter") else float("inf")
+            if not math.isfinite(value) or not 0 <= value <= maximum or (value == 0 and not zero_allowed):
+                raise ValueError("热源参数无效：{} / {}".format(name, key))
     if not PATHS or len({path["name"] for path in PATHS}) != len(PATHS):
         raise ValueError("焊路列表不能为空，名称不能重复。")
     if len(ORIENTATION) != 3 or not all(math.isfinite(value) for value in ORIENTATION) or math.hypot(*ORIENTATION) == 0:
         raise ValueError("方向向量无效。")
     for path in PATHS:
+        if path["heat_source"] not in HEATS:
+            raise ValueError("焊路引用的热源不存在：{}".format(path["name"]))
         if not math.isfinite(path["pause_after"]) or path["pause_after"] < 0:
             raise ValueError("焊后停止时间必须为非负有限数值。")
         points = path["points"]
@@ -48,38 +57,44 @@ def main():
     robot = find_named(process.all_robots, ROBOT_NAME, "Robot", required=False)
     if robot is not None and tuple(robot.all_trajectories):
         raise RuntimeError("目标 Robot 已有 Trajectory，请使用空 Robot 或新名称。")
-    if find_named(project.all_heat_source_parameters, HEAT_SOURCE_PARAMETER_NAME, "热源焊接参数", required=False) is not None:
-        raise RuntimeError("热源名称已存在，请设置新的热源名称。")
+    existing_heat_names = {parameter.name for parameter in project.all_heat_source_parameters}
+    heat_conflicts = existing_heat_names & set(HEATS)
+    if heat_conflicts:
+        raise RuntimeError("热源名称已存在，请设置新的热源名称：{}".format(", ".join(sorted(heat_conflicts))))
     conflicts = {item.name for item in project.all_weld_lines} & {path["name"] for path in PATHS}
     if conflicts:
         raise RuntimeError("Project 已有同名 WeldLine：{}".format(", ".join(sorted(conflicts))))
-    heat_source = project.new_heat_source_parameters(HEAT_SOURCE_PARAMETER_NAME)
-    if heat_source is None or heat_source.name != HEAT_SOURCE_PARAMETER_NAME:
-        raise RuntimeError("创建热源失败。")
-    heat_source.velocity = UnitValueSpeed(HEAT["velocity"], "mm/s")
-    specification = heat_source.specification
-    specification.mode = "transient-direct"
-    specification.power = UnitValuePower(HEAT["power_w"], "W")
-    specification.efficiency = HEAT["efficiency"]
-    heat_source.specification = specification
     lengths = ("conical_upper_radius", "conical_lower_radius", "conical_depth", "disc_radius", "surface_depth")
     scalars = ("volume_heat_fraction", "conical_gaussian_parameter", "disc_gaussian_parameter")
-    geometry = {key: UnitValueLength(HEAT[key], "mm") for key in lengths}
-    geometry.update({key: HEAT[key] for key in scalars})
-    heat_source.heat_source = HeatSourceLaser(**geometry)
-    actual = heat_source.specification
-    checks = [(float(heat_source.velocity.value("mm/s")), HEAT["velocity"]),
-              (float(actual.power.value("W")), HEAT["power_w"]), (float(actual.efficiency), HEAT["efficiency"])]
-    checks.extend((float(getattr(heat_source.heat_source, key).value("mm")), HEAT[key]) for key in lengths)
-    checks.extend((float(getattr(heat_source.heat_source, key)), HEAT[key]) for key in scalars)
-    if actual.mode != "transient-direct" or any(not math.isfinite(value) or abs(value - expected) > max(1e-8, abs(expected)*1e-8) for value, expected in checks):
-        raise RuntimeError("热源参数读取结果与设置不一致。")
+    heat_sources = {}
+    for name, parameters in HEATS.items():
+        heat_source = project.new_heat_source_parameters(name)
+        if heat_source is None or heat_source.name != name:
+            raise RuntimeError("创建热源失败：{}".format(name))
+        heat_source.velocity = UnitValueSpeed(parameters["velocity"], "mm/s")
+        specification = heat_source.specification
+        specification.mode = "transient-direct"
+        specification.power = UnitValuePower(parameters["power_w"], "W")
+        specification.efficiency = parameters["efficiency"]
+        heat_source.specification = specification
+        geometry = {key: UnitValueLength(parameters[key], "mm") for key in lengths}
+        geometry.update({key: parameters[key] for key in scalars})
+        heat_source.heat_source = HeatSourceLaser(**geometry)
+        actual = heat_source.specification
+        checks = [(float(heat_source.velocity.value("mm/s")), parameters["velocity"]),
+                  (float(actual.power.value("W")), parameters["power_w"]), (float(actual.efficiency), parameters["efficiency"])]
+        checks.extend((float(getattr(heat_source.heat_source, key).value("mm")), parameters[key]) for key in lengths)
+        checks.extend((float(getattr(heat_source.heat_source, key)), parameters[key]) for key in scalars)
+        if actual.mode != "transient-direct" or any(not math.isfinite(value) or abs(value - expected) > max(1e-8, abs(expected)*1e-8) for value, expected in checks):
+            raise RuntimeError("热源参数读取结果与设置不一致：{}".format(name))
+        heat_sources[name] = heat_source
     if robot is None:
         robot = process.new_robot(ROBOT_NAME)
         if robot is None or robot.name != ROBOT_NAME:
             raise RuntimeError("创建 Robot 失败：{}".format(ROBOT_NAME))
     trajectories = []
     for path in PATHS:
+        heat_source = heat_sources[path["heat_source"]]
         weld_line = project.new_weld_line(path["name"], "local-vector")
         if weld_line is None or weld_line.name != path["name"]:
             raise RuntimeError("创建 WeldLine 失败：{}".format(path["name"]))

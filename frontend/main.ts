@@ -1,4 +1,5 @@
 import './style.css';
+import './import.css';
 import { Viewer, type MeshData } from './viewer';
 import { WeldingTool } from './welding';
 
@@ -20,20 +21,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header><div class="brand"><img class="brand-icon" src="/icon.svg" alt="激光焊接标识"><strong>SIMUWELD SD</strong></div><nav id="tools" aria-label="功能"></nav><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
   <main>
     <aside class="left">
-      <section><h2>打开模型</h2><p class="muted">选择 Simufact Welding 求解输入文件</p>
-        <label class="file-button">选择 DAT 文件<input id="file" type="file" accept=".dat" /></label>
-        <label class="directory-button">选择模型目录（含 INCLUDE）<input id="directory" type="file" webkitdirectory multiple /></label>
-        <div id="root-picker" hidden><label>主 DAT 文件<select id="root-file"></select></label><button id="import-directory">读取所选模型</button></div>
-        <label class="file-button">导入几何背景<input id="geometry-file" type="file" accept=".inp,.bdf,.nas,.stp,.step,.dat" /></label>
-        <label>背景格式<select id="geometry-format"><option value="">按文件扩展名</option><option value="inp">Abaqus INP</option><option value="bdf">Nastran BDF / DAT</option></select></label>
-        <p class="hint">INP · BDF · STEP。Marc DAT 使用上方入口。</p>
+      <section><h2>打开模型</h2>
+        <button id="open-model" class="primary full">打开模型</button>
+        <p class="hint">DAT · INP · BDF · NAS · STP · STEP</p>
         <div id="model-info" class="model-info">尚未导入模型</div>
       </section>
       <section class="units"><h2>模型单位</h2><p class="hint">默认单位制：mm · t · N · MPa</p><div class="input-row"><label>长度<select id="length-unit"><option>mm</option><option>m</option></select></label><label>力<select id="force-unit"><option>N</option><option>kN</option></select></label></div></section>
       <section><div class="section-title"><h2>实体</h2><span id="body-count" class="badge">0</span></div><div id="body-list"><p class="muted">导入后可以分别显示实体。</p></div></section>
     </aside>
     <div class="workspace"><div class="view-tools"><button id="fit" aria-label="回到中心" title="回到中心"><svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path class="fit-corners" d="M11 4H4v7m21-7h7v7M4 25v7h7m21-7v7h-7"/><path class="fit-model" d="M18 11v14m-7-7h14"/><circle class="fit-model" cx="18" cy="18" r="4"/></svg></button><button data-view="xy" aria-label="XY 平面" title="XY 平面">${planeIcon('xy')}</button><button data-view="xz" aria-label="XZ 平面" title="XZ 平面">${planeIcon('xz')}</button><button data-view="yz" aria-label="YZ 平面" title="YZ 平面">${planeIcon('yz')}</button><label><input id="edges" type="checkbox">网格边线</label></div>
-      <div id="viewport"></div><div id="empty"><span class="empty-shape">◇</span><h1>打开模型</h1><p>选择 DAT 文件开始使用。</p></div>
+      <div id="viewport"></div><div id="empty"><span class="empty-shape">◇</span><h1>打开模型</h1><p>支持 DAT、INP、BDF 和 STEP 等格式。</p></div>
       <div id="busy" hidden><span class="spinner"></span><span id="busy-text">正在读取模型…</span></div>
       <div class="selection-bar" data-tool="surface-load" hidden><div><strong id="selected-count">0</strong><span>已选面</span></div><div><strong id="area-info">—</strong><span>表面积</span></div><button id="clear">清空选择</button></div>
       <div id="message" role="status" hidden></div>
@@ -51,7 +48,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </section>
       <section><div class="section-title"><h2>已保存载荷</h2><span id="load-count" class="badge">0</span></div><div id="load-list"><p class="muted">可以添加多个载荷。</p></div><div id="combined" hidden><label>查看阶段合力<select id="combined-case"></select></label><p id="combined-force"></p><p class="hint">同一阶段重叠面的载荷相加。</p></div></section>
     </aside>
-  </main><footer>copyright LH</footer>`;
+  </main><footer>copyright LH</footer>
+  <dialog id="model-dialog" class="model-dialog" aria-labelledby="model-dialog-title">
+    <div class="import-heading"><h2 id="model-dialog-title">打开模型</h2><button id="close-model-dialog" aria-label="关闭模型导入">×</button></div>
+    <label>输入格式<select id="model-format"><option value="">按文件扩展名</option><option value="marc">Marc / sfMarc DAT</option><option value="inp">Abaqus INP</option><option value="bdf">Nastran BDF / NAS / DAT</option><option value="step">CAD STP / STEP</option></select></label>
+    <button id="choose-model-files" class="file-button full">选择模型文件</button><input id="file" type="file" accept=".dat,.inp,.bdf,.nas,.stp,.step,.inc,.include" multiple hidden />
+    <button id="choose-model-directory" class="directory-button">选择模型目录（含 INCLUDE）</button><input id="directory" type="file" webkitdirectory multiple hidden />
+    <p class="hint">Marc 的关联文件可以一起选择。DAT 默认按 Marc 读取，Nastran DAT 请在输入格式中指定。</p>
+    <div id="root-picker" hidden><label>主模型文件<select id="root-file"></select></label><button id="import-directory" class="primary full">读取所选模型</button></div>
+    <p id="model-import-status" role="status" hidden>正在读取模型…</p><p id="model-import-error" role="alert" hidden></p>
+  </dialog>`;
 
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => get<HTMLInputElement>(id);
@@ -95,6 +101,7 @@ function hideMessage() {
 }
 function message(text: string) {
   hideMessage(); get('message').textContent=text; get('message').hidden=false;
+  if(get<HTMLDialogElement>('model-dialog').open) {get('model-import-error').textContent=text;get('model-import-error').hidden=false;}
 }
 function fadeMessage() {
   const notice=get('message');
@@ -107,12 +114,14 @@ document.addEventListener('pointerdown',fadeMessage);
 async function run(text: string, action: ()=>Promise<void>) {
   if (busy) return;
   busy = true; get('busy').hidden = false; get('busy-text').textContent = text; fadeMessage();
-  document.querySelectorAll<HTMLElement>('aside, header, .selection-bar').forEach(element=>element.inert=true);
+  document.querySelectorAll<HTMLElement>('aside, header, .selection-bar, #model-dialog').forEach(element=>element.inert=true);
+  get('model-import-error').hidden=true;get('model-import-status').hidden=false;
   try { await action(); }
   catch (error) { message((error as Error).message); }
   finally {
     busy = false; get('busy').hidden = true;
-    document.querySelectorAll<HTMLElement>('aside, header, .selection-bar').forEach(element=>element.inert=false);
+    document.querySelectorAll<HTMLElement>('aside, header, .selection-bar, #model-dialog').forEach(element=>element.inert=false);
+    get('model-import-status').hidden=true;
     updateExport();
   }
 }
@@ -275,10 +284,14 @@ async function displayModel(next: ModelInfo) {
   updateSelection(); renderLoads(); welding.refresh();
 }
 
-input('geometry-file').onchange=()=>{const file=input('geometry-file').files?.[0]; if(!file) return;
-  void run('正在读取几何背景…',async()=>{
-    const format=select('geometry-format').value;
-    if(!format && file.name.toLowerCase().endsWith('.dat')) {files=[file];await importFiles(file.name);return;}
+async function openSelectedModel() {
+  const root=select('root-file').value;
+  const file=files.find(item=>fileName(item)===root);
+  if(!file) throw new Error('请选择主模型文件。');
+  const format=select('model-format').value;
+  const extension=file.name.split('.').pop()!.toLowerCase();
+  if(format==='marc' || (!format && extension==='dat')) await importFiles(root);
+  else {
     const data=new FormData();data.append('file',file);if(format) data.append('format',format);
     await displayModel(await (await api('background',data)).json());
     if(activeTool.id==='surface-load') {
@@ -287,17 +300,28 @@ input('geometry-file').onchange=()=>{const file=input('geometry-file').files?.[0
       document.querySelector('main')!.classList.remove('has-tool-panel');
       workspaceTools.forEach(tool=>get('tool-'+tool.id).setAttribute('aria-pressed',String(tool===activeTool)));
     }
-    input('geometry-file').value='';
-  });
-};
+  }
+  get<HTMLDialogElement>('model-dialog').close();
+  input('file').value='';input('directory').value='';
+}
 
-input('file').onchange=()=>{files=Array.from(input('file').files||[]); if(files[0]) void run('正在读取模型，请稍候…',()=>importFiles(files[0].name));};
-input('directory').onchange=()=>{
-  files=Array.from(input('directory').files||[]); const roots=files.filter(file=>file.name.toLowerCase().endsWith('.dat'));
-  const picker=select('root-file'); picker.replaceChildren(); roots.forEach(file=>picker.add(new Option(fileName(file),fileName(file))));
-  get('root-picker').hidden=false; if(!roots.length) message('所选目录没有 DAT 文件');
-};
-get('import-directory').onclick=()=>{void run('正在读取模型目录…',()=>importFiles(select('root-file').value));};
+function prepareModelFiles(nextFiles: File[], automatic: boolean) {
+  if(!nextFiles.length) return;
+  files=nextFiles;
+  const roots=files.filter(file=>/\.(dat|inp|bdf|nas|stp|step)$/i.test(file.name));
+  const picker=select('root-file');picker.replaceChildren();roots.forEach(file=>picker.add(new Option(fileName(file),fileName(file))));
+  get('root-picker').hidden=!roots.length;
+  if(!roots.length) {message('所选文件中没有支持的模型格式。');return;}
+  if(automatic && roots.length===1) void run('正在读取模型，请稍候…',openSelectedModel);
+}
+get('open-model').onclick=()=>{get('model-import-error').hidden=true;get<HTMLDialogElement>('model-dialog').showModal();};
+get('choose-model-files').onclick=()=>input('file').click();
+get('choose-model-directory').onclick=()=>input('directory').click();
+get('close-model-dialog').onclick=()=>get<HTMLDialogElement>('model-dialog').close();
+get<HTMLDialogElement>('model-dialog').oncancel=event=>{if(busy) event.preventDefault();};
+input('file').onchange=()=>prepareModelFiles(Array.from(input('file').files || []),true);
+input('directory').onchange=()=>prepareModelFiles(Array.from(input('directory').files || []),false);
+get('import-directory').onclick=()=>{void run('正在读取模型，请稍候…',openSelectedModel);};
 get('fit').onclick=()=>viewer.recenter();
 document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach(button=>button.onclick=()=>viewer.fit(button.dataset.view!));
 input('edges').onchange=()=>viewer.showEdges(input('edges').checked);

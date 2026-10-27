@@ -81,6 +81,77 @@ test('路径按模型坐标显示，共用点优先当前路径并只拾取已�
   expect(await page.evaluate(()=>(window as any).pathPick)).toBeNull();
 });
 
+test('路径点悬停时点亮，移开与拖动时恢复', async ({page}) => {
+  const point=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    const mesh=await (await fetch('/work/viewer-mesh.json')).json();
+    const first=mesh.points.slice(0,3),second=mesh.points.slice(3,6);
+    viewer.setPaths([{id:0,points:[first,second]},{id:1,points:[first,second]}],1,[0,1],()=>{});
+    viewer.showPaths(true);viewer.fitPaths();viewer.camera.updateMatrixWorld();
+    const projected=viewer.origin.clone().fromArray(first).sub(viewer.origin).project(viewer.camera);
+    return {x:(projected.x+1)*500,y:(1-projected.y)*380};
+  });
+  const brightness=()=>page.evaluate(point=>new Promise<number>(resolve=>requestAnimationFrame(()=>{
+    const viewer=(window as any).viewer,gl=viewer.renderer.getContext(),rect=viewer.renderer.domElement.getBoundingClientRect();
+    const pixels=new Uint8Array(3*3*4),x=Math.floor((point.x-rect.left)*gl.drawingBufferWidth/rect.width),y=Math.floor((rect.bottom-point.y)*gl.drawingBufferHeight/rect.height);
+    gl.readPixels(x-1,y-1,3,3,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+    let sum=0;for(let index=0;index<pixels.length;index+=4) sum+=pixels[index]+pixels[index+1]+pixels[index+2];resolve(sum/9);
+  })),point);
+  const before=await brightness();
+  await page.mouse.move(point.x,point.y);
+  const hover=await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    return {visible:viewer.hoverPoint?.visible,path:viewer.hoverPoint?.userData.path,point:viewer.hoverPoint?.userData.point,cursor:viewer.renderer.domElement.style.cursor};
+  });
+  expect(hover).toEqual({visible:true,path:1,point:0,cursor:'pointer'});
+  expect(await brightness()).toBeGreaterThan(before+100);
+  await page.mouse.move(5,5);
+  expect(await page.evaluate(()=>(window as any).viewer.hoverPoint.visible)).toBe(false);
+  await page.mouse.move(point.x,point.y);await page.mouse.down();
+  await page.mouse.move(point.x+20,point.y+20);
+  expect(await page.evaluate(()=>(window as any).viewer.hoverPoint.visible)).toBe(false);
+  await page.mouse.up();
+});
+
+test('平面视图按整个模型取景，切换路径显示保留相机',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    const mesh=await (await fetch('/work/viewer-mesh.json')).json();
+    viewer.fit('xy');const size=viewer.size;
+    const first=mesh.points.slice(0,3),second=mesh.points.slice(3,6);
+    viewer.setPaths([{id:0,points:[first,second]}],0,[0,1],()=>{});
+    viewer.fitPaths();
+    const before=viewer.camera.position.toArray();
+    viewer.showPaths(false);const hidden=viewer.camera.position.toArray();
+    viewer.showPaths(true);const shown=viewer.camera.position.toArray();
+    const planes=['xy','xz','yz'].map(view=>{viewer.fit(view);return {size:viewer.size,distance:viewer.camera.position.distanceTo(viewer.controls.target)};});
+    return {before,hidden,shown,size,planes,visible:viewer.meshes.filter((mesh:any)=>mesh.visible).length};
+  });
+  expect(result.hidden).toEqual(result.before);expect(result.shown).toEqual(result.before);
+  expect(result.visible).toBeGreaterThan(0);
+  for(const plane of result.planes) {expect(plane.size).toBeCloseTo(result.size,9);expect(plane.distance).toBeCloseTo(result.size*1.65,9);}
+});
+
+test('远处路径不改变模型深度精度、材质和边线显示',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    viewer.fit('xy');viewer.showEdges(true);
+    const capture=async()=>{
+      for(let i=0;i<2;i++) await new Promise(requestAnimationFrame);
+      const gl=viewer.renderer.getContext(),pixels=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);
+      gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+      return {pixels,near:viewer.camera.near,far:viewer.camera.far,materials:viewer.meshes.map((mesh:any)=>({color:mesh.userData.base.getHex(),opacity:mesh.material.opacity,depthWrite:mesh.material.depthWrite,edges:mesh.children[0].visible}))};
+    };
+    const before=await capture();
+    viewer.setPaths([{id:0,points:[[1000000,0,-1000000],[1000001,0,-1000000]]}],0,[0,1],()=>{});viewer.showPaths(true);
+    const visible=await capture();viewer.showPaths(false);const hidden=await capture();
+    const changed=(pixels:Uint8Array)=>pixels.reduce((count,value,index)=>count+(Math.abs(value-before.pixels[index])>5?1:0),0);
+    return {before:{near:before.near,far:before.far,materials:before.materials},visible:{near:visible.near,far:visible.far,materials:visible.materials},hidden:{near:hidden.near,far:hidden.far,materials:hidden.materials},visiblePixels:changed(visible.pixels),hiddenPixels:changed(hidden.pixels)};
+  });
+  expect(result.visible).toEqual(result.before);expect(result.hidden).toEqual(result.before);
+  expect(result.visiblePixels).toBe(0);expect(result.hiddenPixels).toBe(0);
+});
+
 test('定位短焊路后保留模型显示的深度范围', async ({page}) => {
   const depths=await page.evaluate(async()=>{
     const viewer=(window as any).viewer;
@@ -347,34 +418,41 @@ test('实体显示开关保留旋转、缩放与平移，回到中心使用可�
   expect(result.centerError).toBeLessThan(1e-8);expect(result.newDistance).toBeCloseTo(result.distance,9);expect(result.offset).toEqual([0,0]);
 });
 
-test('滚轮放大达到上限后停止且能够立即缩小', async ({page}) => {
+test('滚轮到达原限制后继续放大，增速约为正常的五分之一', async ({page}) => {
   await page.evaluate(()=>(window as any).viewer.fit('xy'));
   await page.mouse.move(500,380);
-  for(let i=0;i<32;i++) {
-    await page.mouse.wheel(0,-120);
-    await page.evaluate(async()=>{for(let j=0;j<2;j++) await new Promise(requestAnimationFrame);});
-  }
-  const limit=await page.evaluate(()=>{
+  const initial=await page.evaluate(()=>{
     const viewer=(window as any).viewer;
-    return {distance:viewer.camera.position.distanceTo(viewer.controls.target),min:viewer.controls.minDistance,max:viewer.controls.maxDistance};
+    return viewer.camera.zoom/viewer.camera.position.distanceTo(viewer.controls.target);
   });
-  expect(limit.min).toBeGreaterThan(0);
-  expect(Number.isFinite(limit.max)).toBe(true);
-  expect(limit.distance).toBeCloseTo(limit.min,10);
   await page.mouse.wheel(0,-120);
-  const stopped=await page.evaluate(async()=>{
-    for(let i=0;i<3;i++) await new Promise(requestAnimationFrame);
+  const normal=await page.evaluate(async()=>{
+    for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);
     const viewer=(window as any).viewer;
-    return viewer.camera.position.distanceTo(viewer.controls.target);
+    const scale=viewer.camera.zoom/viewer.camera.position.distanceTo(viewer.controls.target);
+    viewer.fit('xy');viewer.camera.position.sub(viewer.controls.target).setLength(viewer.controls.minDistance).add(viewer.controls.target);viewer.controls.update();
+    return {scale,threshold:viewer.camera.zoom/viewer.camera.position.distanceTo(viewer.controls.target)};
   });
-  expect(stopped).toBeCloseTo(limit.distance,10);
+  await page.mouse.wheel(0,-120);
+  const continued=await page.evaluate(async()=>{
+    for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);
+    const viewer=(window as any).viewer;
+    return {scale:viewer.camera.zoom/viewer.camera.position.distanceTo(viewer.controls.target),zoom:viewer.camera.zoom};
+  });
+  expect(continued.zoom).toBeGreaterThan(1);
+  expect(Math.log(continued.scale/normal.threshold)/Math.log(normal.scale/initial)).toBeCloseTo(.2,1);
+  for(let i=0;i<10;i++) await page.mouse.wheel(0,-120);
+  const enlarged=await page.evaluate(async()=>{
+    for(let i=0;i<30;i++) await new Promise(requestAnimationFrame);
+    return (window as any).viewer.camera.zoom;
+  });
+  expect(enlarged).toBeGreaterThan(continued.zoom);
   await page.mouse.wheel(0,120);
   const reversed=await page.evaluate(async()=>{
     for(let i=0;i<3;i++) await new Promise(requestAnimationFrame);
-    const viewer=(window as any).viewer;
-    return viewer.camera.position.distanceTo(viewer.controls.target);
+    return (window as any).viewer.camera.zoom;
   });
-  expect(reversed).toBeGreaterThan(stopped);
+  expect(reversed).toBeLessThan(enlarged);
 });
 
 test('坐标平面与平移、窗口调整后的点击选面', async ({page}) => {
