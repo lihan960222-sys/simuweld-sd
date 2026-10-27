@@ -212,6 +212,19 @@ test('坐标平面与平移、窗口调整后的点击选面', async ({page}) =>
   expect(target.face).toBeGreaterThanOrEqual(0);
   await page.mouse.click(target.x,target.y);
   expect(await page.evaluate(()=>(window as any).picked)).toBe(target.face);
+  await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    viewer.meshes.forEach((mesh:any)=>viewer.setBodyOpacity(mesh.userData.body,0));
+    (window as any).picked=-1;
+  });
+  await page.mouse.click(target.x,target.y);
+  expect(await page.evaluate(()=>(window as any).picked)).toBe(-1);
+  await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    viewer.meshes.forEach((mesh:any)=>viewer.setBodyOpacity(mesh.userData.body,0.35));
+  });
+  await page.mouse.click(target.x,target.y);
+  expect(await page.evaluate(()=>(window as any).picked)).toBe(target.face);
 });
 
 test('实体颜色与半透明可修改且选择颜色独立', async ({page}) => {

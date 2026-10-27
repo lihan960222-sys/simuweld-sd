@@ -44,7 +44,7 @@ export class Viewer {
       if (event.button !== 0 || Math.hypot(event.clientX-down[0], event.clientY-down[1]) > 4) return;
       const rect = this.renderer.domElement.getBoundingClientRect();
       this.raycaster.setFromCamera(new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1, -(event.clientY-rect.top)/rect.height*2+1), this.camera);
-      const hit = this.raycaster.intersectObjects(this.meshes.filter(mesh => mesh.visible), false)[0];
+      const hit = this.raycaster.intersectObjects(this.meshes.filter(mesh => mesh.visible && mesh.material.opacity > 0), false)[0];
       if (hit && hit.faceIndex != null) onPick(hit.object.userData.faceIds[hit.faceIndex]);
     });
     new ResizeObserver(() => {

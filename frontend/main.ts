@@ -10,11 +10,12 @@ interface Load {
   length_unit: string; force_unit: string; pressure_unit: string;
 }
 interface Preview { area: number; force: number[]; face_count: number; centers: number[][]; directions: number[][]; area_unit: string; force_unit: string; }
+interface WorkspaceTool { id: string; label: string; activate?: ()=>void; pick?: (face: number)=>void; }
 
 const cubeIcon = (plane: string) => `<svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><polygon class="cube-face ${plane==='xy'?'active':''}" points="18,5 31,12 18,19 5,12"/><polygon class="cube-face ${plane==='xz'?'active':''}" points="5,12 18,19 18,32 5,25"/><polygon class="cube-face ${plane==='yz'?'active':''}" points="18,19 31,12 31,25 18,32"/></svg>`;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header><div class="brand"><span class="brand-icon">SD</span><div><strong>SIMUWELD SD</strong><small>面载荷编辑</small></div></div><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
+  <header><div class="brand"><span class="brand-icon">SD</span><strong>SIMUWELD SD</strong></div><nav id="tools" aria-label="功能"></nav><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
   <main>
     <aside class="left">
       <section><h2>打开模型</h2><p class="muted">选择 Simufact Welding 求解输入文件</p>
@@ -23,21 +24,22 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div id="root-picker" hidden><label>主 DAT 文件<select id="root-file"></select></label><button id="import-directory">读取所选模型</button></div>
         <div id="model-info" class="model-info">尚未导入模型</div>
       </section>
+      <section class="units"><h2>模型单位</h2><p class="hint">默认单位制：mm · t · N · MPa</p><div class="input-row"><label>长度<select id="length-unit"><option>mm</option><option>m</option></select></label><label>力<select id="force-unit"><option>N</option><option>kN</option></select></label></div></section>
       <section><div class="section-title"><h2>实体</h2><span id="body-count" class="badge">0</span></div><div id="body-list"><p class="muted">导入后可以分别显示实体。</p></div></section>
     </aside>
     <div class="workspace"><div class="view-tools"><button id="fit" aria-label="适合窗口" title="适合窗口"><svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path class="fit-corners" d="M11 4H4v7m21-7h7v7M4 25v7h7m21-7v7h-7"/><path class="fit-model" d="m18 10 9 5v10l-9 5-9-5V15Zm0 10 9-5m-9 5-9-5m9 5v10"/></svg></button><button data-view="xy" aria-label="XY 平面" title="XY 平面">${cubeIcon('xy')}</button><button data-view="xz" aria-label="XZ 平面" title="XZ 平面">${cubeIcon('xz')}</button><button data-view="yz" aria-label="YZ 平面" title="YZ 平面">${cubeIcon('yz')}</button><label><input id="edges" type="checkbox">网格边线</label></div>
-      <div id="viewport"></div><div id="empty"><span class="empty-shape">◇</span><h1>在模型表面定义载荷</h1><p>导入 DAT 文件，点击一个面开始选择。</p></div>
+      <div id="viewport"></div><div id="empty"><span class="empty-shape">◇</span><h1>打开模型</h1><p>选择 DAT 文件开始使用。</p></div>
       <div id="busy" hidden><span class="spinner"></span><span id="busy-text">正在读取模型…</span></div>
-      <div class="selection-bar"><div><strong id="selected-count">0</strong><span>已选面</span></div><div><strong id="area-info">—</strong><span>表面积</span></div><button id="clear">清空选择</button></div>
+      <div class="selection-bar" data-tool="surface-load" hidden><div><strong id="selected-count">0</strong><span>已选面</span></div><div><strong id="area-info">—</strong><span>表面积</span></div><button id="clear">清空选择</button></div>
       <div id="message" role="status" hidden></div>
     </div>
-    <aside class="right">
+    <aside class="right" data-tool="surface-load" aria-label="面载荷参数" hidden>
+      <div class="tool-heading"><h1>面载荷</h1><p class="hint">选择表面，设置压力与方向。</p></div>
       <section><h2>按夹角连续选择</h2><label>相邻面最大夹角 <span id="angle-value">20°</span><input id="angle" type="range" min="0" max="90" step="1" value="20"></label><p class="hint">从点击的面沿相邻表面扩展。</p><select id="selection-mode" aria-label="选择方式"><option value="replace">替换当前选择</option><option value="add">增加选择</option><option value="remove">移除选择</option></select></section>
       <section><h2 id="load-heading">设置面载荷</h2><label>名称<input id="load-name" value="载荷 1" maxlength="80"></label>
         <div class="input-row"><label>大小<input id="magnitude" type="number" min="0" step="any" value="1"></label><label>压力单位<select id="pressure-unit"><option>MPa</option><option>kPa</option><option>Pa</option></select></label></div>
         <label>方向<select id="mode"><option value="inward">沿表面法向 · 向内</option><option value="outward">沿表面法向 · 向外</option><option value="manual">手动方向 · 全局坐标</option></select></label>
         <div id="direction" class="input-row" hidden><label>X<input id="dx" type="number" step="any" value="0"></label><label>Y<input id="dy" type="number" step="any" value="0"></label><label>Z<input id="dz" type="number" step="any" value="-1"></label></div>
-        <details class="units" open><summary>模型单位</summary><p class="hint">默认单位制：mm · t · N · MPa</p><div class="input-row"><label>长度<select id="length-unit"><option>mm</option><option>m</option></select></label><label>力<select id="force-unit"><option>N</option><option>kN</option></select></label></div></details>
         <label>生效阶段<select id="case-mode"><option value="all">全部计算阶段</option><option value="custom">指定阶段</option></select></label>
         <div id="case-list" hidden></div>
         <button id="preview" class="full">预览方向与合力</button><div id="force-info" class="force-info">选面后显示预计合力</div><button id="save-load" class="primary full">保存载荷</button>
@@ -61,6 +63,8 @@ let busy = false;
 let editing: number | null = null;
 let files: File[] = [];
 const loads: {spec: Load; result: Preview}[] = [];
+let activeTool: WorkspaceTool;
+let currentPreview: Preview | null = null;
 
 async function api(path: string, body?: object | FormData): Promise<Response> {
   const headers: Record<string,string> = {'X-Session-Token': token};
@@ -88,12 +92,30 @@ async function run(text: string, action: ()=>Promise<void>) {
   }
 }
 
-const viewer = new Viewer(get('viewport'), face => { void run('正在选择表面…', async()=>{
-  baseSelection = [...selected]; lastSeed = face; await pick();
-}); });
+const viewer = new Viewer(get('viewport'), face => activeTool.pick?.(face));
+const workspaceTools: WorkspaceTool[] = [
+  {id:'model', label:'模型'},
+  {id:'surface-load', label:'面载荷', activate:()=>{viewer.highlight(selected); drawPreview();}, pick:face=>{
+    void run('正在选择表面…',async()=>{baseSelection=[...selected];lastSeed=face;await pick();});
+  }},
+];
+for (const tool of workspaceTools) {
+  const button=document.createElement('button'); button.textContent=tool.label; button.id='tool-'+tool.id;
+  button.onclick=()=>activateTool(tool); get('tools').append(button);
+}
+function activateTool(tool: WorkspaceTool) {
+  if(busy || activeTool===tool) return;
+  activeTool=tool;
+  document.querySelectorAll<HTMLElement>('[data-tool]').forEach(panel=>panel.hidden=panel.dataset.tool!==tool.id);
+  document.querySelector('main')!.classList.toggle('has-tool-panel',!!document.querySelector('aside.right:not([hidden])'));
+  workspaceTools.forEach(item=>get('tool-'+item.id).setAttribute('aria-pressed',String(item===tool)));
+  viewer.highlight([]); viewer.clearArrows(); tool.activate?.();
+}
+activateTool(workspaceTools[0]);
 
 function updateSelection() {
-  viewer.highlight(selected);
+  viewer.highlight(activeTool.id==='surface-load'?selected:[]);
+  currentPreview=null;
   get('selected-count').textContent = String(selected.length);
   get('area-info').textContent = '—'; get('force-info').textContent = '点击预览查看面积和合力'; viewer.clearArrows();
 }
@@ -117,10 +139,13 @@ function currentLoad(): Load {
 
 async function showPreview(): Promise<Preview> {
   const result: Preview = await (await api('preview', currentLoad())).json();
-  viewer.showArrows(result.centers, result.directions, result.area);
+  currentPreview=result; drawPreview();
   get('area-info').textContent = format(result.area)+' '+result.area_unit;
   get('force-info').textContent = `合力 (${result.force.map(format).join(', ')}) ${result.force_unit}`;
   return result;
+}
+function drawPreview() {
+  if(activeTool.id==='surface-load' && currentPreview) viewer.showArrows(currentPreview.centers,currentPreview.directions,currentPreview.area);
 }
 
 function updateExport() {
@@ -185,9 +210,17 @@ async function importFiles(root: string) {
     color.oninput=()=>viewer.setBodyColor(body.id,color.value);
     const transparent=document.createElement('label'); transparent.className='check';
     const opacity=document.createElement('input'); opacity.type='checkbox'; opacity.setAttribute('aria-label',body.name+' 半透明');
-    opacity.onchange=()=>viewer.setBodyOpacity(body.id,opacity.checked?0.35:1);
     transparent.append(opacity,document.createTextNode('半透明'));
-    options.append(color,transparent); card.append(label,options); bodies.append(card);
+    const transparency=document.createElement('label'); transparency.className='transparency';
+    const amount=document.createElement('output'); amount.value='65%';
+    const slider=document.createElement('input'); slider.type='range'; slider.min='0'; slider.max='100'; slider.step='1'; slider.value='65'; slider.disabled=true;
+    slider.id='transparency-'+body.id; slider.setAttribute('aria-label',body.name+' 透明度'); slider.setAttribute('aria-valuetext','65%');
+    transparency.htmlFor=slider.id; amount.htmlFor.add(slider.id);
+    const applyOpacity=()=>{ amount.value=slider.value+'%'; slider.setAttribute('aria-valuetext',amount.value); viewer.setBodyOpacity(body.id,opacity.checked?1-Number(slider.value)/100:1); };
+    slider.oninput=applyOpacity;
+    opacity.onchange=()=>{slider.disabled=!opacity.checked;applyOpacity();};
+    transparency.append(document.createTextNode('透明度'),amount,slider);
+    options.append(color,transparent); card.append(label,options,transparency); bodies.append(card);
   });
   const cases=get('case-list'), combined=select('combined-case'); cases.replaceChildren(); combined.replaceChildren();
   info.cases.forEach(item=>{
@@ -211,10 +244,10 @@ input('edges').onchange=()=>viewer.showEdges(input('edges').checked);
 input('angle').oninput=()=>{get('angle-value').textContent=input('angle').value+'°';};
 input('angle').onchange=()=>{if(lastSeed!==null) void run('正在更新选择…',pick);};
 get('clear').onclick=()=>{if(!busy){selected=[];lastSeed=null;editing=null;updateSelection();}};
-select('mode').onchange=()=>{get('direction').hidden=select('mode').value!=='manual';viewer.clearArrows();};
+select('mode').onchange=()=>{get('direction').hidden=select('mode').value!=='manual';currentPreview=null;viewer.clearArrows();};
 select('case-mode').onchange=()=>{get('case-list').hidden=select('case-mode').value!=='custom';};
 for (const id of ['length-unit','force-unit']) select(id).onchange=()=>{
-  updateExport(); viewer.clearArrows();
+  updateExport(); currentPreview=null; viewer.clearArrows();
   void run('正在按模型单位更新载荷…',async()=>{
     const updated = await Promise.all(loads.map(async load=>{
       const spec = {...load.spec, length_unit:select('length-unit').value, force_unit:select('force-unit').value};

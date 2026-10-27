@@ -13,7 +13,7 @@ from .server import create_app
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SIMUWELD SD 本机面载荷编辑")
+    parser = argparse.ArgumentParser(description="SIMUWELD SD 本机模型工具")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()

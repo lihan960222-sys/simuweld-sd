@@ -1,4 +1,14 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+
+async function frameSum(page: Page) {
+  return page.evaluate(()=>new Promise<number>(resolve=>requestAnimationFrame(()=>{
+    const canvas=document.querySelector('canvas')!;
+    const gl=canvas.getContext('webgl2')!;
+    const pixels=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);
+    gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+    resolve(pixels.reduce((sum,value)=>sum+value,0));
+  })));
+}
 
 test('真实模型导入、选面、手动方向、载荷保存和下载', async ({page}) => {
   const errors: string[] = [];
@@ -6,8 +16,15 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   page.on('pageerror', e => errors.push(e.message));
   page.on('request', r => { if (!r.url().startsWith((process.env.SFMARC_TEST_URL || 'http://127.0.0.1:8765')+'/')) external.push(r.url()); });
   await page.goto('/#token=' + process.env.SFMARC_TEST_TOKEN);
-  await expect(page).toHaveTitle('SIMUWELD SD · 面载荷编辑');
+  await expect(page).toHaveTitle('SIMUWELD SD');
   await expect(page.locator('.brand')).toContainText('SIMUWELD SD');
+  await expect(page.getByText('面载荷编辑',{exact:true})).toHaveCount(0);
+  const modelTool=page.getByRole('button',{name:'模型',exact:true});
+  const loadTool=page.getByRole('button',{name:'面载荷',exact:true});
+  await expect(modelTool).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('.right')).toBeHidden();
+  await expect(page.locator('.selection-bar')).toBeHidden();
+  await expect(page.locator('#empty h1')).toHaveText('打开模型');
   await expect(page.locator('.eyebrow, .help, .local, #unit-confirm, #solver-info, #material-info')).toHaveCount(0);
   await expect(page.locator('footer')).toHaveText('copyright LH');
   await expect(page.locator('.left details')).toHaveCount(0);
@@ -30,11 +47,49 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   const body=page.locator('.body-card').first();
   await body.locator('input[type=color]').fill('#e45d41');
   await expect(body.locator('input[type=color]')).toHaveValue('#e45d41');
+  const opaqueFrame=await frameSum(page);
   await body.getByRole('checkbox',{name:/半透明/}).check();
+  const transparency=body.getByRole('slider',{name:/透明度/});
+  await expect(transparency).toBeEnabled();
+  await expect(transparency).toHaveValue('65');
+  const translucentFrame=await frameSum(page);
+  expect(translucentFrame).not.toBe(opaqueFrame);
+  await transparency.fill('0');
+  expect(await frameSum(page)).toBe(opaqueFrame);
+  await transparency.fill('100');
+  expect(await frameSum(page)).not.toBe(translucentFrame);
+  await transparency.fill('80');
+  expect(await frameSum(page)).not.toBe(translucentFrame);
+  await expect(body.locator('output')).toHaveText('80%');
+  await transparency.focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(transparency).toHaveValue('79');
+  await expect(body.locator('output')).toHaveText('79%');
+  await body.getByRole('checkbox',{name:/半透明/}).uncheck();
+  await expect(transparency).toBeDisabled();
+  expect(await frameSum(page)).toBe(opaqueFrame);
+  await body.getByRole('checkbox',{name:/半透明/}).check();
+  await expect(transparency).toHaveValue('79');
+  await expect(body.locator('output')).toHaveText('79%');
+  const otherBody=page.locator('.body-card').nth(1);
+  await otherBody.getByRole('checkbox',{name:/半透明/}).check();
+  await expect(otherBody.getByRole('slider',{name:/透明度/})).toHaveValue('65');
+  await otherBody.getByRole('checkbox',{name:/半透明/}).uncheck();
   await body.getByRole('checkbox',{name:/半透明/}).uncheck();
   for(const plane of ['XY','XZ','YZ']) await page.getByRole('button',{name:plane+' 平面'}).click();
   await page.getByRole('button',{name:'适合窗口'}).click();
   const canvas = page.locator('canvas');
+  let selectionRequests=0;
+  page.on('request',request=>{if(request.url().endsWith('/api/select'))selectionRequests++;});
+  await canvas.click();
+  await expect(page.locator('#selected-count')).toHaveText('0');
+  expect(selectionRequests).toBe(0);
+  const modelWidth=(await canvas.boundingBox())!.width;
+  await loadTool.click();
+  await expect(loadTool).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('.right')).toBeVisible();
+  await expect(page.locator('.selection-bar')).toBeVisible();
+  expect((await canvas.boundingBox())!.width).toBeLessThan(modelWidth);
   const box = (await canvas.boundingBox())!;
   for (const [x, y] of [[0.5,0.5],[0.4,0.5],[0.6,0.5],[0.5,0.6],[0.3,0.4]]) {
     await canvas.click({position: {x: box.width*x, y: box.height*y}});
@@ -47,6 +102,10 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await page.locator('#dy').fill('0');
   await page.locator('#dz').fill('-4');
   await page.locator('#magnitude').fill('2');
+  await page.locator('#case-mode').selectOption('custom');
+  const firstCase=page.locator('#case-list input:checked').first();
+  const excludedCase=await firstCase.getAttribute('value');
+  await firstCase.uncheck();
   const previewResponse=page.waitForResponse(response=>response.url().endsWith('/api/preview'));
   await page.locator('#preview').click();
   const preview=await (await previewResponse).json();
@@ -54,13 +113,36 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   expect(preview.area_unit).toBe('mm²');
   expect(preview.force_unit).toBe('N');
   await expect(page.locator('#force-info')).toContainText('N');
+  const selection=await page.locator('#selected-count').textContent();
+  const force=await page.locator('#force-info').textContent();
+  const previewFrame=await frameSum(page);
+  await modelTool.click();
+  await expect(page.locator('.right')).toBeHidden();
+  const requestsBefore=selectionRequests;
+  await canvas.click();
+  expect(selectionRequests).toBe(requestsBefore);
+  await loadTool.click();
+  await expect(page.locator('#selected-count')).toHaveText(selection!);
+  await expect(page.locator('#force-info')).toHaveText(force!);
+  await expect(page.locator('#magnitude')).toHaveValue('2');
+  await expect(page.locator('#mode')).toHaveValue('manual');
+  await expect(page.locator('#dx')).toHaveValue('3');
+  await expect(page.locator('#dz')).toHaveValue('-4');
+  await expect(page.locator('#case-mode')).toHaveValue('custom');
+  await expect(page.locator(`#case-list input[value="${excludedCase}"]`)).not.toBeChecked();
+  await expect(transparency).toHaveValue('79');
+  await expect(body.locator('input[type=color]')).toHaveValue('#e45d41');
+  expect(await frameSum(page)).toBe(previewFrame);
   await page.locator('#save-load').click();
   await expect(page.locator('#load-list')).toContainText('载荷 1');
+  await expect(page.locator('#export')).toBeEnabled();
+  await modelTool.click();
   await expect(page.locator('#export')).toBeEnabled();
   await page.locator('#length-unit').selectOption('m');
   await expect(page.locator('#busy')).toBeHidden();
   await expect(page.locator('#length-unit')).toHaveValue('m');
   await expect(page.locator('#export')).toBeEnabled();
+  await loadTool.click();
   await page.locator('#length-unit').selectOption('mm');
   await expect(page.locator('#busy')).toBeHidden();
   await expect(page.locator('#export')).toBeEnabled();
@@ -68,6 +150,9 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(page.locator('#busy')).toBeHidden();
   await expect(page.locator('#length-unit')).toHaveValue('mm');
   await page.locator('#load-name').fill('夹紧压力');
+  await modelTool.click();
+  await loadTool.click();
+  await expect(page.locator('#load-name')).toHaveValue('夹紧压力');
   await page.locator('#save-load').click();
   await expect(page.locator('#load-list')).toContainText('夹紧压力');
   await expect(page.locator('#load-count')).toHaveText('1');
@@ -78,7 +163,16 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   expect(saved[0].length_unit).toBe('mm');
   expect(saved[0].force_unit).toBe('N');
   expect(saved[0].name).toBe('夹紧压力');
+  expect(saved[0].cases).not.toContain(Number(excludedCase));
   expect((await download).suggestedFilename()).toMatch(/_loads\.zip$/);
   expect(errors).toEqual([]);
   expect(external).toEqual([]);
+  for(const width of [960,768,430]) {
+    await page.setViewportSize({width,height:960});
+    for(const tool of [modelTool,loadTool]) {
+      await tool.click();
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      await expect(page.locator('#tools')).toBeVisible();
+    }
+  }
 });
