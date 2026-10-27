@@ -35,6 +35,10 @@ def test_real_upload_selection_preview_and_export(client):
     assert info["nodes"] == (125 if path.name == "elemtype7_tension.dat" else 163924)
     assert info["cases"][1]["name"] == "加载"
     headers["X-Model-Id"] = info["id"]
+    mesh = client.get("/api/mesh", headers=headers).json()
+    assert len(mesh["edges"]) == len(mesh["edge_bodies"]) * 2
+    assert mesh["edges"] and min(mesh["edges"]) >= 0 and max(mesh["edges"]) < info["nodes"]
+    assert set(mesh["edge_bodies"]) == {body["id"] for body in info["bodies"]}
     selection = client.post("/api/select", headers=headers, json={"seed": 0, "angle": 20}).json()
     assert 0 in selection["faces"]
     load = {"faces": selection["faces"], "magnitude": 2, "mode": "inward", "cases": [1]}

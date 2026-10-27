@@ -31,10 +31,12 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   const viewButtons=page.locator('.view-tools button');
   await expect(viewButtons).toHaveCount(4);
   for(const button of await viewButtons.all()) {
-    await expect(button).toHaveText('');
     await expect(button.locator('svg')).toHaveCount(1);
-    await expect(button).toHaveAttribute('aria-label',/适合窗口|XY 平面|XZ 平面|YZ 平面/);
+    await expect(button).toHaveAttribute('aria-label',/回到中心|XY 平面|XZ 平面|YZ 平面/);
   }
+  await expect(viewButtons.first()).toHaveText('');
+  for(const plane of ['xy','xz','yz']) await expect(page.locator(`[data-view=${plane}] svg text`)).toHaveText(plane.toUpperCase().split(''));
+  await expect(page.getByRole('img',{name:'坐标轴方向'})).toBeVisible();
   await expect(page.locator('.workspace')).toHaveCSS('background-color','rgb(237, 242, 246)');
   await expect(page.locator('#length-unit')).toHaveValue('mm');
   await expect(page.locator('#force-unit')).toHaveValue('N');
@@ -76,8 +78,13 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(otherBody.getByRole('slider',{name:/透明度/})).toHaveValue('65');
   await otherBody.getByRole('checkbox',{name:/半透明/}).uncheck();
   await body.getByRole('checkbox',{name:/半透明/}).uncheck();
-  for(const plane of ['XY','XZ','YZ']) await page.getByRole('button',{name:plane+' 平面'}).click();
-  await page.getByRole('button',{name:'适合窗口'}).click();
+  for(const plane of ['YZ','XZ','XY']) await page.getByRole('button',{name:plane+' 平面'}).click();
+  const centeredFrame=await frameSum(page);
+  await page.getByRole('button',{name:'回到中心'}).click();
+  expect(await frameSum(page)).toBe(centeredFrame);
+  await page.locator('#edges').check();
+  expect(await frameSum(page)).not.toBe(centeredFrame);
+  await page.locator('#edges').uncheck();
   const canvas = page.locator('canvas');
   let selectionRequests=0;
   page.on('request',request=>{if(request.url().endsWith('/api/select'))selectionRequests++;});
@@ -165,6 +172,21 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   expect(saved[0].name).toBe('夹紧压力');
   expect(saved[0].cases).not.toContain(Number(excludedCase));
   expect((await download).suggestedFilename()).toMatch(/_loads\.zip$/);
+  const notice=page.locator('#message');
+  await expect(notice).toBeVisible();
+  await page.locator('#preview').click();
+  await expect.poll(()=>notice.evaluate(element=>Number(getComputedStyle(element).opacity)),{intervals:[16]}).toBeLessThan(1);
+  await expect(notice).toBeVisible();
+  await expect(notice).toBeHidden();
+  const nextDownload=page.waitForEvent('download');
+  await page.locator('#export').click();
+  await nextDownload;
+  await expect(notice).toBeVisible();
+  await page.locator('#clear').click();
+  await page.locator('#preview').click();
+  await expect(notice).toContainText('选择');
+  await page.evaluate(async()=>{for(let i=0;i<30;i++) await new Promise(requestAnimationFrame);});
+  await expect(notice).toBeVisible();
   expect(errors).toEqual([]);
   expect(external).toEqual([]);
   for(const width of [960,768,430]) {

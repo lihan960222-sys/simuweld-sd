@@ -72,11 +72,18 @@ canvas { display: block; width: 100%; height: 100%; outline: none; }
 .view-tools button { display: grid; place-items: center; width: 44px; height: 42px; padding: 5px; background: #ffffffed; border-color: #cbd8e1; color: #355669; }
 .view-tools button:hover { background: #e1eef0; }
 .view-tools svg { width: 30px; height: 30px; }
-.cube-face { fill: #dce7ee; stroke: #648595; stroke-width: 1.2; stroke-linejoin: round; }
-.cube-face.active { fill: #43b7b7; stroke: #167d88; }
+.axis-x { color: #c84d59; }
+.axis-y { color: #258266; }
+.axis-z { color: #4478c3; }
+.plane-axis path, .orientation line, .orientation path { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.plane-axis text { fill: currentColor; font-size: 10px; font-weight: 650; }
+.orientation { position: absolute; right: 14px; top: 92px; width: 104px; height: 104px; pointer-events: none; }
+.axis-background { fill: #ffffffb3; }
+.orientation g circle { fill: #edf2f6; }
+.orientation text { fill: currentColor; font-size: 12px; font-weight: 650; }
 .fit-corners, .fit-model { stroke: #355669; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .fit-corners { fill: none; }
-.fit-model { fill: #dce7ee; }
+.fit-model { fill: none; }
 .view-tools label { display: flex; align-items: center; color: #567282; gap: 4px; margin: 0 0 0 auto; font-size: 10px; }
 #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; color: #718896; }
 #empty h1 { font-size: 22px; font-weight: 500; color: #456374; margin: 15px 0 10px; }

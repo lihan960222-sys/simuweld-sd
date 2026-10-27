@@ -128,7 +128,8 @@ def create_app(token: str):
     def mesh(request: Request):
         model = current(request)
         return {"points": model.points.ravel().tolist(), "triangles": model.triangles.ravel().tolist(),
-                "triangle_faces": model.triangle_faces.tolist(), "body_ids": model.body_ids.tolist()}
+                "triangle_faces": model.triangle_faces.tolist(), "body_ids": model.body_ids.tolist(),
+                "edges": model.edges.ravel().tolist(), "edge_bodies": model.edge_bodies.tolist()}
 
     @app.post("/api/select")
     def select(request: Request, data: SelectionInput):

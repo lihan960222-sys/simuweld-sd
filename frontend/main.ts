@@ -12,7 +12,7 @@ interface Load {
 interface Preview { area: number; force: number[]; face_count: number; centers: number[][]; directions: number[][]; area_unit: string; force_unit: string; }
 interface WorkspaceTool { id: string; label: string; activate?: ()=>void; pick?: (face: number)=>void; }
 
-const cubeIcon = (plane: string) => `<svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><polygon class="cube-face ${plane==='xy'?'active':''}" points="18,5 31,12 18,19 5,12"/><polygon class="cube-face ${plane==='xz'?'active':''}" points="5,12 18,19 18,32 5,25"/><polygon class="cube-face ${plane==='yz'?'active':''}" points="18,19 31,12 31,25 18,32"/></svg>`;
+const planeIcon = (plane: string) => `<svg class="plane-axis" viewBox="0 0 36 36" aria-hidden="true" focusable="false"><g class="axis-${plane[0]}"><path d="M10 27H25m-4-3 4 3-4 3"/><text x="27" y="33">${plane[0].toUpperCase()}</text></g><g class="axis-${plane[1]}"><path d="M10 27V12m-3 4 3-4 3 4"/><text x="7" y="9">${plane[1].toUpperCase()}</text></g></svg>`;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header><div class="brand"><span class="brand-icon">SD</span><strong>SIMUWELD SD</strong></div><nav id="tools" aria-label="功能"></nav><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
@@ -27,7 +27,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section class="units"><h2>模型单位</h2><p class="hint">默认单位制：mm · t · N · MPa</p><div class="input-row"><label>长度<select id="length-unit"><option>mm</option><option>m</option></select></label><label>力<select id="force-unit"><option>N</option><option>kN</option></select></label></div></section>
       <section><div class="section-title"><h2>实体</h2><span id="body-count" class="badge">0</span></div><div id="body-list"><p class="muted">导入后可以分别显示实体。</p></div></section>
     </aside>
-    <div class="workspace"><div class="view-tools"><button id="fit" aria-label="适合窗口" title="适合窗口"><svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path class="fit-corners" d="M11 4H4v7m21-7h7v7M4 25v7h7m21-7v7h-7"/><path class="fit-model" d="m18 10 9 5v10l-9 5-9-5V15Zm0 10 9-5m-9 5-9-5m9 5v10"/></svg></button><button data-view="xy" aria-label="XY 平面" title="XY 平面">${cubeIcon('xy')}</button><button data-view="xz" aria-label="XZ 平面" title="XZ 平面">${cubeIcon('xz')}</button><button data-view="yz" aria-label="YZ 平面" title="YZ 平面">${cubeIcon('yz')}</button><label><input id="edges" type="checkbox">网格边线</label></div>
+    <div class="workspace"><div class="view-tools"><button id="fit" aria-label="回到中心" title="回到中心"><svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path class="fit-corners" d="M11 4H4v7m21-7h7v7M4 25v7h7m21-7v7h-7"/><path class="fit-model" d="M18 11v14m-7-7h14"/><circle class="fit-model" cx="18" cy="18" r="4"/></svg></button><button data-view="xy" aria-label="XY 平面" title="XY 平面">${planeIcon('xy')}</button><button data-view="xz" aria-label="XZ 平面" title="XZ 平面">${planeIcon('xz')}</button><button data-view="yz" aria-label="YZ 平面" title="YZ 平面">${planeIcon('yz')}</button><label><input id="edges" type="checkbox">网格边线</label></div>
       <div id="viewport"></div><div id="empty"><span class="empty-shape">◇</span><h1>打开模型</h1><p>选择 DAT 文件开始使用。</p></div>
       <div id="busy" hidden><span class="spinner"></span><span id="busy-text">正在读取模型…</span></div>
       <div class="selection-bar" data-tool="surface-load" hidden><div><strong id="selected-count">0</strong><span>已选面</span></div><div><strong id="area-info">—</strong><span>表面积</span></div><button id="clear">清空选择</button></div>
@@ -78,10 +78,24 @@ async function api(path: string, body?: object | FormData): Promise<Response> {
   return response;
 }
 
-function message(text: string) { get('message').textContent = text; get('message').hidden = false; }
+let messageAnimation: Animation | null = null;
+function hideMessage() {
+  messageAnimation?.cancel(); messageAnimation=null; get('message').hidden=true;
+}
+function message(text: string) {
+  hideMessage(); get('message').textContent=text; get('message').hidden=false;
+}
+function fadeMessage() {
+  const notice=get('message');
+  if(notice.hidden || messageAnimation) return;
+  const animation=notice.animate([{opacity:1},{opacity:0}],{duration:matchMedia('(prefers-reduced-motion: reduce)').matches?1:300,fill:'forwards'});
+  messageAnimation=animation;
+  animation.onfinish=()=>{if(messageAnimation===animation) hideMessage();};
+}
+document.addEventListener('pointerdown',fadeMessage);
 async function run(text: string, action: ()=>Promise<void>) {
   if (busy) return;
-  busy = true; get('busy').hidden = false; get('busy-text').textContent = text; get('message').hidden = true;
+  busy = true; get('busy').hidden = false; get('busy-text').textContent = text; fadeMessage();
   document.querySelectorAll<HTMLElement>('aside, header, .selection-bar').forEach(element=>element.inert=true);
   try { await action(); }
   catch (error) { message((error as Error).message); }
@@ -238,7 +252,7 @@ input('directory').onchange=()=>{
   get('root-picker').hidden=false; if(!roots.length) message('所选目录没有 DAT 文件');
 };
 get('import-directory').onclick=()=>{void run('正在读取模型目录…',()=>importFiles(select('root-file').value));};
-get('fit').onclick=()=>viewer.fit();
+get('fit').onclick=()=>viewer.recenter();
 document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach(button=>button.onclick=()=>viewer.fit(button.dataset.view!));
 input('edges').onchange=()=>viewer.showEdges(input('edges').checked);
 input('angle').oninput=()=>{get('angle-value').textContent=input('angle').value+'°';};

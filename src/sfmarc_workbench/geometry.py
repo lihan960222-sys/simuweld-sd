@@ -101,6 +101,8 @@ class SurfaceModel:
                 a, b = adjacent
                 self.neighbors[a].append(b)
                 self.neighbors[b].append(a)
+        self.edges = np.array([(a, b) for _, a, b in edges], dtype=np.uint32)
+        self.edge_bodies = np.array([body for body, _, _ in edges], dtype=np.int32)
         self.body_names = {int(i): f"实体 {int(i) + 1}" for i in np.unique(self.body_ids)}
         self.triangles, self.triangle_faces = [], []
         for i, face in enumerate(self.faces):

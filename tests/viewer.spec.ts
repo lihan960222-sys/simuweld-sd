@@ -90,6 +90,117 @@ test('箭头随实际选中区域面积缩放', async ({page}) => {
   expect(samples[0].length).toBeLessThan(samples[1].length);
 });
 
+test('回到中心保留旋转角度、相机上方和缩放', async ({page}) => {
+  await page.mouse.move(450,380);
+  await page.mouse.down({button:'right'});
+  await page.mouse.move(610,440,{steps:12});
+  await page.mouse.up({button:'right'});
+  await page.mouse.wheel(0,-240);
+  await page.mouse.move(400,450);
+  await page.mouse.down();
+  await page.mouse.move(590,240,{steps:15});
+  await page.mouse.up();
+  const result=await page.evaluate(async()=>{
+    for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);
+    const viewer=(window as any).viewer;
+    const camera=viewer.camera, rotation=camera.quaternion.clone(), up=camera.up.clone();
+    const distance=camera.position.distanceTo(viewer.controls.target);
+    const before=viewer.pivot.clone().project(camera).toArray();
+    viewer.recenter();
+    for(let i=0;i<20;i++) await new Promise(requestAnimationFrame);
+    return {before,after:viewer.pivot.clone().project(camera).toArray(),
+      rotation:rotation.angleTo(camera.quaternion),up:up.distanceTo(camera.up),
+      scale:camera.position.distanceTo(viewer.controls.target)/distance};
+  });
+  expect(Math.hypot(result.before[0],result.before[1])).toBeGreaterThan(0.02);
+  expect(Math.hypot(result.after[0],result.after[1])).toBeLessThan(1e-6);
+  expect(result.rotation).toBeLessThan(1e-6);
+  expect(result.up).toBeLessThan(1e-6);
+  expect(result.scale).toBeCloseTo(1,10);
+});
+
+test('坐标轴指示随视角变化并与模型投影方向一致', async ({page}) => {
+  await expect(page.getByRole('img',{name:'坐标轴方向'})).toBeVisible();
+  const inspect=()=>page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    const center=viewer.pivot.clone().project(viewer.camera);
+    return [...document.querySelectorAll<SVGGElement>('.orientation [data-axis]')].map(group=>{
+      const axis='XYZ'.indexOf(group.dataset.axis!);
+      const point=viewer.pivot.clone();
+      point.setComponent(axis,point.getComponent(axis)+viewer.size*0.1);
+      point.project(viewer.camera).sub(center);
+      const line=group.querySelector('line')!;
+      return {axis:group.dataset.axis,dx:Number(line.getAttribute('x2'))-Number(line.getAttribute('x1')),
+        dy:Number(line.getAttribute('y2'))-Number(line.getAttribute('y1')),px:point.x,py:-point.y};
+    });
+  });
+  for(const view of ['xy','xz','yz','iso']) {
+    await page.evaluate(async view=>{
+      (window as any).viewer.fit(view);
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+    },view);
+    const axes=await inspect();
+    expect(axes).toHaveLength(3);
+    for(const axis of axes) {
+      if(Math.hypot(axis.px,axis.py)<1e-8) expect(Math.hypot(axis.dx,axis.dy)).toBeLessThan(1e-6);
+      else {
+        expect(axis.dx*axis.px+axis.dy*axis.py).toBeGreaterThan(0);
+        // 相机投影的横纵比例与方形坐标轴图标分别核对。
+        const aspect=1000/760;
+        expect(Math.abs(axis.dx*axis.py-axis.dy*axis.px*aspect)).toBeLessThan(1e-5);
+      }
+    }
+  }
+  const before=await inspect();
+  await page.mouse.move(430,450);
+  await page.mouse.down();
+  await page.mouse.move(650,240,{steps:15});
+  await page.mouse.up();
+  await page.evaluate(async()=>{for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);});
+  const after=await inspect();
+  expect(after).not.toEqual(before);
+  for(const axis of after) expect(Math.abs(axis.dx*axis.py-axis.dy*axis.px*1000/760)).toBeLessThan(1e-5);
+});
+
+test('显示网格边线与实际原始表面边界一致', async ({page}) => {
+  const result=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    const data=await (await fetch('/work/viewer-mesh.json')).json();
+    const point=(node:number)=>[0,1,2].map(axis=>Math.fround(data.points[node*3+axis]-viewer.origin.getComponent(axis))).join(',');
+    const key=(body:number,a:string,b:string)=>body+':'+[a,b].sort().join('|');
+    const expected=new Set<string>();
+    data.faces.forEach((face:number[],i:number)=>face.forEach((node,j)=>expected.add(key(data.body_ids[i],point(node),point(face[(j+1)%face.length])))));
+    viewer.showEdges(true);
+    const actual=new Set<string>();
+    for(const mesh of viewer.meshes) {
+      const lines=mesh.children[0], positions=lines.geometry.getAttribute('position');
+      if(!lines.visible) throw new Error('边线未显示');
+      for(let i=0;i<positions.count;i+=2) {
+        const a=[positions.getX(i),positions.getY(i),positions.getZ(i)].join(',');
+        const b=[positions.getX(i+1),positions.getY(i+1),positions.getZ(i+1)].join(',');
+        actual.add(key(mesh.userData.body,a,b));
+      }
+    }
+    return {count:actual.size,expected:expected.size,extra:[...actual].filter(edge=>!expected.has(edge)).length,
+      missing:[...expected].filter(edge=>!actual.has(edge)).length};
+  });
+  expect(result.count).toBeGreaterThan(0);
+  expect(result.extra).toBe(0);
+  expect(result.missing).toBe(0);
+  expect(result.count).toBe(result.expected);
+});
+
+test('通知在下次点击时渐隐', async ({page}) => {
+  await page.goto('/');
+  const notice=page.locator('#message');
+  await expect(notice).toBeVisible();
+  await page.locator('footer').click();
+  await expect.poll(()=>notice.evaluate(element=>Number(getComputedStyle(element).opacity)),{intervals:[16]}).toBeLessThan(1);
+  await expect(notice).toBeVisible();
+  await expect(notice).toBeHidden();
+});
+
 test('只显示边缘实体时围绕可见实体中心旋转', async ({page}) => {
   const initial=await page.evaluate(()=>{
     const viewer=(window as any).viewer;
