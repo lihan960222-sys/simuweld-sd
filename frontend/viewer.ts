@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
+import type { HeatParameters } from './heatSettings';
 
 export interface MeshData {
   points: number[]; triangles: number[]; triangle_faces: number[]; body_ids: number[];
   edges: number[]; edge_bodies: number[];
 }
+export interface PathData { id: number; points: number[][]; }
 
 export class Viewer {
   private renderer = new THREE.WebGLRenderer({antialias: true});
@@ -16,6 +18,15 @@ export class Viewer {
   private viewOffset = new THREE.Vector2();
   private models = new THREE.Group();
   private arrows = new THREE.Group();
+  private paths = new THREE.Group();
+  private torch = new THREE.Group();
+  private heat = new THREE.Group();
+  private weldLight = new THREE.PointLight(0xffa84c,0,0,0);
+  private heatExtent = 0;
+  private pathBounds = new THREE.Box3();
+  private pathFocus = new THREE.Box3();
+  private pathsFocused = false;
+  private pathPick: ((path: number, point: number)=>void) | null = null;
   private raycaster = new THREE.Raycaster();
   private origin = new THREE.Vector3();
   private pivot = new THREE.Vector3();
@@ -47,12 +58,29 @@ export class Viewer {
     this.scene.add(new THREE.HemisphereLight(0xf1f6ff, 0x617385, 2.5));
     const light = new THREE.DirectionalLight(0xffffff, 3);
     light.position.set(3, -4, 5);
-    this.scene.add(light, this.models, this.arrows);
+    this.scene.add(light, this.models, this.arrows, this.paths, this.torch);
+    this.torch.visible=false;
     let down: [number, number] = [0, 0];
     this.renderer.domElement.addEventListener('pointerdown', event => { down = [event.clientX, event.clientY]; });
     this.renderer.domElement.addEventListener('pointerup', event => {
       if (event.button !== 0 || Math.hypot(event.clientX-down[0], event.clientY-down[1]) > 4) return;
       const rect = this.renderer.domElement.getBoundingClientRect();
+      if (this.paths.visible && this.pathPick) {
+        let closest: {path: number; point: number; distance: number; active: boolean} | null = null;
+        const projected = new THREE.Vector3();
+        for (const object of this.paths.children) if (object instanceof THREE.Points && object.userData.path != null) {
+          const positions = object.geometry.getAttribute('position');
+          for (let index=0; index<positions.count; index++) {
+            projected.fromBufferAttribute(positions,index).project(this.camera);
+            if (Math.abs(projected.z)>1) continue;
+            const distance = Math.hypot((projected.x+1)*rect.width/2-(event.clientX-rect.left),(1-projected.y)*rect.height/2-(event.clientY-rect.top));
+            const active=object.userData.active as boolean;
+            if (distance<=8 && (!closest || (active && !closest.active) || (active===closest.active && distance<closest.distance))) closest={path:object.userData.path,point:index,distance,active};
+          }
+        }
+        if (closest) this.pathPick(closest.path,closest.point);
+        return;
+      }
       this.raycaster.setFromCamera(new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1, -(event.clientY-rect.top)/rect.height*2+1), this.camera);
       const hit = this.raycaster.intersectObjects(this.meshes.filter(mesh => mesh.visible && mesh.material.opacity > 0), false)[0];
       if (hit && hit.faceIndex != null) onPick(hit.object.userData.faceIds[hit.faceIndex]);
@@ -125,8 +153,10 @@ export class Viewer {
   }
 
   load(data: MeshData) {
+    this.hideWeldPreview();
     this.clearGroup(this.models);
     this.clearArrows();
+    this.clearGroup(this.paths); this.pathBounds.makeEmpty(); this.pathsFocused=false;
     this.meshes = [];
     this.selected.clear();
     const box = new THREE.Box3();
@@ -190,8 +220,10 @@ export class Viewer {
   }
 
   recenter() {
+    this.updateBounds();
     if (this.bounds.isEmpty()) return;
     this.controls.dispose();
+    this.bounds.getCenter(this.pivot);
     this.camera.position.sub(this.controls.target).add(this.pivot);
     this.viewOffset.set(0,0);
     this.camera.clearViewOffset();
@@ -200,11 +232,10 @@ export class Viewer {
   }
 
   private frame(direction: THREE.Vector3) {
-    this.bounds.makeEmpty();
-    for (const mesh of this.meshes) if (mesh.visible) this.bounds.union(mesh.geometry.boundingBox!);
+    this.updateBounds();
     if (this.bounds.isEmpty()) return;
     this.bounds.getCenter(this.pivot);
-    this.size = this.bounds.getSize(new THREE.Vector3()).length();
+    this.size = Math.max(this.bounds.getSize(new THREE.Vector3()).length(),1e-9);
     this.controls.dispose();
     this.viewOffset.set(0,0);
     this.camera.clearViewOffset();
@@ -214,10 +245,23 @@ export class Viewer {
     this.updateClipping();
   }
 
+  private updateBounds() {
+    this.bounds.makeEmpty();
+    for (const mesh of this.meshes) if (mesh.visible) this.bounds.union(mesh.geometry.boundingBox!);
+    if (this.paths.visible && (this.pathsFocused || this.bounds.isEmpty())) this.bounds.copy(this.pathFocus.isEmpty()?this.pathBounds:this.pathFocus);
+  }
+
   private updateClipping() {
     if (this.bounds.isEmpty()) return;
     this.camera.updateMatrixWorld();
-    this.viewBounds.copy(this.bounds).applyMatrix4(this.camera.matrixWorldInverse);
+    this.viewBounds.copy(this.bounds);
+    for (const mesh of this.meshes) if (mesh.visible) this.viewBounds.union(mesh.geometry.boundingBox!);
+    if (this.paths.visible) this.viewBounds.union(this.pathBounds);
+    if (this.torch.visible) {
+      const radius=new THREE.Vector3().setScalar(this.heatExtent);
+      this.viewBounds.union(new THREE.Box3(this.torch.position.clone().sub(radius),this.torch.position.clone().add(radius)));
+    }
+    this.viewBounds.applyMatrix4(this.camera.matrixWorldInverse);
     // 保留载荷箭头的显示空间，同时提高相近表面的深度精度。
     const margin = Math.max(this.size * 0.05, this.arrowLength);
     const near = Math.max(this.size * 1e-5, -this.viewBounds.max.z - margin);
@@ -243,9 +287,8 @@ export class Viewer {
   }
 
   showBody(body: number, visible: boolean) {
-    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
     this.meshes.filter(mesh=>mesh.userData.body===body).forEach(mesh=>mesh.visible=visible);
-    this.frame(direction);
+    this.updateClipping();
   }
   bodyColor(body: number) { return '#'+this.meshes.find(mesh=>mesh.userData.body===body)!.userData.base.getHexString(); }
   setBodyColor(body: number, color: string) {
@@ -275,9 +318,76 @@ export class Viewer {
     });
   }
   clearArrows() { this.clearGroup(this.arrows); this.arrowLength = 0; }
+  configureWeldPreview(parameters: HeatParameters, direction: number[], scale: number) {
+    this.clearGroup(this.torch); this.heat=new THREE.Group();
+    const upper=parameters.conical_upper_radius*scale, lower=parameters.conical_lower_radius*scale, depth=parameters.conical_depth*scale;
+    const extent=Math.max(upper,lower,depth,parameters.disc_radius*scale);
+    this.heatExtent=extent*6;
+    const cone=new THREE.Mesh(new THREE.CylinderGeometry(upper,lower,depth,32),new THREE.MeshBasicMaterial({color:0xffa13f,transparent:true,opacity:0.45,depthWrite:false}));
+    cone.position.y=-depth/2;
+    const disc=new THREE.Mesh(new THREE.CircleGeometry(parameters.disc_radius*scale,32),new THREE.MeshBasicMaterial({color:0xffd46a,transparent:true,opacity:0.6,side:THREE.DoubleSide,depthWrite:false}));
+    disc.rotation.x=-Math.PI/2;disc.position.y=extent*0.005;
+    const nozzle=new THREE.Mesh(new THREE.CylinderGeometry(extent*.45,extent*.18,extent*2,16),new THREE.MeshStandardMaterial({color:0x586b80,metalness:0.6,roughness:0.4}));
+    nozzle.position.y=extent*2;
+    const beam=new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(0,extent,0)]),new THREE.LineBasicMaterial({color:0xffa02c}));
+    const marker=new THREE.Points(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3()]),new THREE.PointsMaterial({color:0xff8b1f,size:9,sizeAttenuation:false,depthTest:false}));
+    marker.renderOrder=30;
+    this.weldLight.intensity=Math.log1p(parameters.power_w*parameters.efficiency);
+    this.weldLight.distance=extent*6;this.weldLight.position.set(0,extent*.1,0);
+    cone.visible=parameters.volume_heat_fraction>0;disc.visible=parameters.volume_heat_fraction<1;
+    this.heat.add(cone,disc,beam,marker,this.weldLight);this.torch.add(nozzle,this.heat);
+    this.torch.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),new THREE.Vector3().fromArray(direction).normalize());
+  }
+  showWeldFrame(point: number[], scale: number, welding: boolean) {
+    this.torch.position.fromArray(point).multiplyScalar(scale).sub(this.origin);
+    this.torch.visible=true;this.heat.visible=welding;
+  }
+  hideWeldPreview() { this.torch.visible=false; }
+  setPaths(data: PathData[], selected: number, range: [number,number], onPick: (path: number, point: number)=>void) {
+    this.clearGroup(this.paths); this.pathBounds.makeEmpty(); this.pathFocus.makeEmpty(); this.pathPick=onPick;
+    if (!this.meshes.length) {
+      const box=new THREE.Box3();
+      for (const path of data) for (const xyz of path.points) box.expandByPoint(new THREE.Vector3().fromArray(xyz));
+      if (!box.isEmpty()) box.getCenter(this.origin);
+    }
+    const [low,high]=[Math.min(...range),Math.max(...range)];
+    for (const path of data) {
+      const coordinates=new Float32Array(path.points.length*3), colors=new Float32Array(coordinates.length);
+      const active=path.id===selected;
+      path.points.forEach((xyz,index)=>{
+        const point=new THREE.Vector3().fromArray(xyz).sub(this.origin);
+        point.toArray(coordinates,index*3); this.pathBounds.expandByPoint(point);
+        if (active && index>=low && index<=high) this.pathFocus.expandByPoint(point);
+        const color=new THREE.Color(active && index>=low && index<=high?0xe59b26:0x4b8c99);
+        if(active && index===range[0]) color.set(0x238355);
+        if(active && index===range[1]) color.set(0xc04456);
+        color.toArray(colors,index*3);
+      });
+      const geometry=new THREE.BufferGeometry();
+      geometry.setAttribute('position',new THREE.BufferAttribute(coordinates,3));
+      geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));
+      const line=new THREE.Line(geometry,new THREE.LineBasicMaterial({vertexColors:true,depthTest:false,transparent:true,opacity:active?1:0.45}));
+      line.renderOrder=20;
+      const points=new THREE.Points(geometry,new THREE.PointsMaterial({vertexColors:true,size:active?7:5,sizeAttenuation:false,depthTest:false}));
+      points.renderOrder=21; points.userData={path:path.id,active};
+      this.paths.add(line,points);
+    }
+  }
+  showPaths(visible: boolean) {
+    this.paths.visible=visible;
+    if (!visible && this.pathsFocused && this.meshes.length) {
+      this.pathsFocused=false;
+      this.frame(this.camera.position.clone().sub(this.controls.target).normalize());
+    }
+  }
+  fitPaths() {
+    if(this.pathBounds.isEmpty()) return;
+    this.pathsFocused=true; this.paths.visible=true;
+    this.frame(this.camera.position.clone().sub(this.controls.target).normalize());
+  }
   private clearGroup(group: THREE.Group) {
     group.traverse(object => {
-      if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
+      if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points) {
         object.geometry.dispose();
         const materials = Array.isArray(object.material) ? object.material : [object.material];
         materials.forEach(material=>material.dispose());

@@ -15,9 +15,10 @@ for distribution in distributions():
                 datas.append((str(source), "licenses/" + distribution.metadata["Name"]))
 
 analysis = Analysis(["run_app.py"], pathex=["src"], binaries=[], datas=datas,
-                    hiddenimports=["meshioplusplus._core"],
+                    hiddenimports=["meshioplusplus._core", "meshioplusplus._skin", "meshioplusplus._merge"],
                     excludes=["pytest", "numpy.tests", "scipy.tests", "pip"], noarchive=False)
 pyz = PYZ(analysis.pure)
 exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="SIMUWELD-SD",
+          icon="public/icon.ico",
           console=True, debug=False, strip=False, upx=False)
 collect = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="SIMUWELD-SD")

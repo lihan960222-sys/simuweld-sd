@@ -1,7 +1,9 @@
 import './style.css';
 import { Viewer, type MeshData } from './viewer';
+import { WeldingTool } from './welding';
 
 interface ModelInfo {
+  supports_loads: boolean; length_unit?: string;
   id: string; filename: string; nodes: number; elements: number; faces: number;
   bodies: {id: number; name: string}[]; cases: {id: number; name: string; initial: boolean}[];
 }
@@ -15,13 +17,16 @@ interface WorkspaceTool { id: string; label: string; activate?: ()=>void; pick?:
 const planeIcon = (plane: string) => `<svg class="plane-axis" viewBox="0 0 36 36" aria-hidden="true" focusable="false"><g class="axis-${plane[0]}"><path d="M10 27H25m-4-3 4 3-4 3"/><text x="27" y="33">${plane[0].toUpperCase()}</text></g><g class="axis-${plane[1]}"><path d="M10 27V12m-3 4 3-4 3 4"/><text x="7" y="9">${plane[1].toUpperCase()}</text></g></svg>`;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header><div class="brand"><span class="brand-icon">SD</span><strong>SIMUWELD SD</strong></div><nav id="tools" aria-label="功能"></nav><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
+  <header><div class="brand"><img class="brand-icon" src="/icon.svg" alt="激光焊接标识"><strong>SIMUWELD SD</strong></div><nav id="tools" aria-label="功能"></nav><button id="export" class="primary" disabled>导出 DAT 文件组 ↗</button></header>
   <main>
     <aside class="left">
       <section><h2>打开模型</h2><p class="muted">选择 Simufact Welding 求解输入文件</p>
         <label class="file-button">选择 DAT 文件<input id="file" type="file" accept=".dat" /></label>
         <label class="directory-button">选择模型目录（含 INCLUDE）<input id="directory" type="file" webkitdirectory multiple /></label>
         <div id="root-picker" hidden><label>主 DAT 文件<select id="root-file"></select></label><button id="import-directory">读取所选模型</button></div>
+        <label class="file-button">导入几何背景<input id="geometry-file" type="file" accept=".inp,.bdf,.nas,.stp,.step,.dat" /></label>
+        <label>背景格式<select id="geometry-format"><option value="">按文件扩展名</option><option value="inp">Abaqus INP</option><option value="bdf">Nastran BDF / DAT</option></select></label>
+        <p class="hint">INP · BDF · STEP。Marc DAT 使用上方入口。</p>
         <div id="model-info" class="model-info">尚未导入模型</div>
       </section>
       <section class="units"><h2>模型单位</h2><p class="hint">默认单位制：mm · t · N · MPa</p><div class="input-row"><label>长度<select id="length-unit"><option>mm</option><option>m</option></select></label><label>力<select id="force-unit"><option>N</option><option>kN</option></select></label></div></section>
@@ -66,6 +71,12 @@ const loads: {spec: Load; result: Preview}[] = [];
 let activeTool: WorkspaceTool;
 let currentPreview: Preview | null = null;
 
+function confirmLeave(event: BeforeUnloadEvent) {
+  event.preventDefault();
+  event.returnValue = true;
+}
+document.addEventListener('input',()=>window.addEventListener('beforeunload',confirmLeave));
+
 async function api(path: string, body?: object | FormData): Promise<Response> {
   const headers: Record<string,string> = {'X-Session-Token': token};
   if (info) headers['X-Model-Id'] = info.id;
@@ -107,11 +118,17 @@ async function run(text: string, action: ()=>Promise<void>) {
 }
 
 const viewer = new Viewer(get('viewport'), face => activeTool.pick?.(face));
+const welding = new WeldingTool(viewer, {api,run,message,unit:()=>select('length-unit').value,hasModel:()=>!!info,changed:()=>{
+  window.addEventListener('beforeunload',confirmLeave);
+  get('empty').hidden=!!info || welding.hasPaths;
+  updateExport();
+}});
 const workspaceTools: WorkspaceTool[] = [
   {id:'model', label:'模型'},
   {id:'surface-load', label:'面载荷', activate:()=>{viewer.highlight(selected); drawPreview();}, pick:face=>{
     void run('正在选择表面…',async()=>{baseSelection=[...selected];lastSeed=face;await pick();});
   }},
+  {id:'welding', label:'生成焊路'},
 ];
 for (const tool of workspaceTools) {
   const button=document.createElement('button'); button.textContent=tool.label; button.id='tool-'+tool.id;
@@ -119,11 +136,13 @@ for (const tool of workspaceTools) {
 }
 function activateTool(tool: WorkspaceTool) {
   if(busy || activeTool===tool) return;
+  if(tool.id==='surface-load' && info?.supports_loads===false) {message('面载荷需要导入 Marc DAT 模型。');return;}
   activeTool=tool;
   document.querySelectorAll<HTMLElement>('[data-tool]').forEach(panel=>panel.hidden=panel.dataset.tool!==tool.id);
   document.querySelector('main')!.classList.toggle('has-tool-panel',!!document.querySelector('aside.right:not([hidden])'));
   workspaceTools.forEach(item=>get('tool-'+item.id).setAttribute('aria-pressed',String(item===tool)));
-  viewer.highlight([]); viewer.clearArrows(); tool.activate?.();
+  viewer.highlight([]); viewer.clearArrows(); welding.activate(tool.id==='welding'); tool.activate?.(); updateExport();
+  get('empty').hidden=!!info || (tool.id==='welding' && welding.hasPaths);
 }
 activateTool(workspaceTools[0]);
 
@@ -163,6 +182,12 @@ function drawPreview() {
 }
 
 function updateExport() {
+  if(activeTool?.id==='welding') {
+    get('export').textContent='导出 Python 脚本 ↗';
+    get<HTMLButtonElement>('export').disabled=busy || !welding.canExport;
+    return;
+  }
+  get('export').textContent='导出 DAT 文件组 ↗';
   const consistent = loads.every(({spec})=>spec.length_unit===select('length-unit').value && spec.force_unit===select('force-unit').value);
   get<HTMLButtonElement>('export').disabled = busy || !loads.length || !consistent;
 }
@@ -207,7 +232,12 @@ async function importFiles(root: string) {
   const data = new FormData(); data.append('root',root);
   files.forEach(file=>data.append('files',file,fileName(file)));
   const next: ModelInfo = await (await api('model',data)).json();
+  await displayModel(next);
+}
+
+async function displayModel(next: ModelInfo) {
   info=next;
+  if(info.length_unit) select('length-unit').value=info.length_unit;
   mesh=await (await api('mesh')).json();
   viewer.load(mesh!); get('empty').hidden=true; selected=[]; loads.length=0; editing=null; lastSeed=null;
   get('model-info').textContent=`${info.filename}\n${info.nodes.toLocaleString()} 节点\n${info.elements.toLocaleString()} 单元 · ${info.faces.toLocaleString()} 外表面`;
@@ -242,8 +272,24 @@ async function importFiles(root: string) {
     label.append(checkbox,document.createTextNode(item.name+(item.initial?'（初始）':''))); cases.append(label);
     if (!item.initial) combined.add(new Option(item.name,String(item.id)));
   });
-  updateSelection(); renderLoads();
+  updateSelection(); renderLoads(); welding.refresh();
 }
+
+input('geometry-file').onchange=()=>{const file=input('geometry-file').files?.[0]; if(!file) return;
+  void run('正在读取几何背景…',async()=>{
+    const format=select('geometry-format').value;
+    if(!format && file.name.toLowerCase().endsWith('.dat')) {files=[file];await importFiles(file.name);return;}
+    const data=new FormData();data.append('file',file);if(format) data.append('format',format);
+    await displayModel(await (await api('background',data)).json());
+    if(activeTool.id==='surface-load') {
+      activeTool=workspaceTools[0];
+      document.querySelectorAll<HTMLElement>('[data-tool]').forEach(panel=>panel.hidden=true);
+      document.querySelector('main')!.classList.remove('has-tool-panel');
+      workspaceTools.forEach(tool=>get('tool-'+tool.id).setAttribute('aria-pressed',String(tool===activeTool)));
+    }
+    input('geometry-file').value='';
+  });
+};
 
 input('file').onchange=()=>{files=Array.from(input('file').files||[]); if(files[0]) void run('正在读取模型，请稍候…',()=>importFiles(files[0].name));};
 input('directory').onchange=()=>{
@@ -261,6 +307,7 @@ get('clear').onclick=()=>{if(!busy){selected=[];lastSeed=null;editing=null;updat
 select('mode').onchange=()=>{get('direction').hidden=select('mode').value!=='manual';currentPreview=null;viewer.clearArrows();};
 select('case-mode').onchange=()=>{get('case-list').hidden=select('case-mode').value!=='custom';};
 for (const id of ['length-unit','force-unit']) select(id).onchange=()=>{
+  welding.refresh();
   updateExport(); currentPreview=null; viewer.clearArrows();
   void run('正在按模型单位更新载荷…',async()=>{
     const updated = await Promise.all(loads.map(async load=>{
@@ -280,6 +327,7 @@ get('save-load').onclick=()=>{void run('正在保存载荷…',async()=>{
   editing=null; renderLoads();
 });};
 get('export').onclick=()=>{void run('正在生成新文件…',async()=>{
+  if(activeTool.id==='welding') {await welding.export();return;}
   const response=await api('export',{loads:loads.map(load=>load.spec)});
   const url=URL.createObjectURL(await response.blob());const link=document.createElement('a');link.href=url;
   link.download=info!.filename.split('/').pop()!.replace(/\.dat$/i,'')+'_loads.zip';link.click();

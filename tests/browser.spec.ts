@@ -1,4 +1,181 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+
+test('几何背景、热源比例图、移动预览与完整参数导出',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await expect.poll(()=>page.locator('.brand-icon').evaluate(element=>(element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth>0)).toBe(true);
+  expect((await page.request.get('/icon.svg')).ok()).toBe(true);
+  for(const extension of ['inp','bdf','stp']) {
+    await page.locator('#geometry-file').setInputFiles('work/geometry-tests/two_blocks.'+extension);
+    await expect(page.locator('#model-info')).toContainText('two_blocks.'+extension);
+    await expect(page.locator('#body-list .body-card')).toHaveCount(2);
+    await expect(page.locator('#busy')).toBeHidden();
+  }
+  await page.getByLabel('实体 1 半透明',{exact:true}).check();
+  await page.getByLabel('实体 1 透明度',{exact:true}).fill('42');
+  await page.getByLabel('实体 1 颜色',{exact:true}).fill('#e5bb85');
+  await page.getByRole('button',{name:'生成焊路',exact:true}).click();
+  await page.locator('#heat-conical_upper_radius').fill('0.4');
+  await page.locator('#heat-conical_depth').fill('0.8');
+  const ratio=await page.locator('#heat-diagram').evaluate(element=>Number((element as SVGSVGElement).dataset.depth)/Number((element as SVGSVGElement).dataset.upperRadius));
+  expect(ratio).toBeCloseTo(2,10);
+  await expect(page.locator('#heat-diagram')).toContainText('0.8 mm');
+  await page.locator('#heat-power_w').fill('250');
+  await page.locator('#heat-velocity').fill('50');
+  await page.locator('#heat-efficiency').fill('0.7');
+  await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
+  await expect(page.locator('#weld-source-info')).toContainText('295');
+  await page.locator('#weld-start').selectOption('13');await page.locator('#weld-end').selectOption('281');
+  await page.locator('#weld-pause').fill('2');await page.locator('#weld-add').click();
+  await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
+  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:'编辑',exact:true}).click();
+  await expect(page.locator('#weld-play')).toBeDisabled();
+  await page.locator('#weld-source').selectOption('1');
+  await expect(page.locator('#weld-play')).toBeEnabled();
+  await expect(page.locator('#export')).toBeEnabled();
+  await page.locator('#weld-progress').scrollIntoViewIfNeeded();
+  const firstSlider=(await page.locator('#weld-progress').boundingBox())!;
+  await page.mouse.click(firstSlider.x+firstSlider.width*.8,firstSlider.y+firstSlider.height/2);
+  await expect(page.locator('#weld-time')).toContainText('焊后停止');
+  await page.locator('#weld-reset').click();
+  await page.locator('#weld-play').click();
+  await expect(page.locator('#weld-play')).toHaveText('暂停');
+  await expect.poll(async()=>Number(await page.locator('#weld-progress').inputValue())).toBeGreaterThan(0.1);
+  await page.locator('#weld-play').click();
+  const paused=await page.locator('#weld-progress').inputValue();
+  await page.waitForTimeout(120);
+  expect(await page.locator('#weld-progress').inputValue()).toBe(paused);
+  const total=Number((await page.locator('#weld-time').textContent())!.match(/\/ ([\d.]+) s/)![1]);
+  expect(total).toBeCloseTo(205.4898146957904/50+2,3);
+  const slider=(await page.locator('#weld-progress').boundingBox())!;
+  await page.mouse.click(slider.x+slider.width*.8,slider.y+slider.height/2);
+  await expect(page.locator('#weld-time')).toContainText('焊后停止');
+  await page.locator('#weld-reset').click();
+  await expect(page.locator('#weld-progress')).toHaveValue('0');
+  await page.locator('#heat-efficiency').fill('2');
+  await expect(page.locator('#heat-error')).not.toBeEmpty();
+  await expect(page.locator('#export')).toBeDisabled();
+  await expect(page.locator('#weld-play')).toBeDisabled();
+  await page.locator('#heat-efficiency').fill('0.7');
+  const request=page.waitForRequest(request=>request.url().endsWith('/api/weld-script'));
+  const download=page.waitForEvent('download');await page.locator('#export').click();
+  const heat=(await request).postDataJSON().heat;
+  expect(heat.power_w).toBe(250);expect(heat.velocity).toBe(50);expect(heat.efficiency).toBe(0.7);
+  expect(heat.conical_depth).toBe(0.8);await download;
+  for(const width of [960,768,430]) {
+    await page.setViewportSize({width,height:960});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('CSV 焊路按范围、顺序和停止时间导出脚本', async ({page}) => {
+  const errors: string[]=[];
+  page.on('pageerror', error=>errors.push(error.message));
+  await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await page.getByRole('button',{name:'生成焊路',exact:true}).click();
+  await expect(page.locator('#export')).toHaveText('导出 Python 脚本 ↗');
+  await expect(page.locator('#export')).toBeDisabled();
+  await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
+  await expect(page.locator('#weld-source-info')).toContainText('295');
+  await expect(page.locator('#empty')).toBeHidden();
+  await page.locator('#weld-start').selectOption('281');
+  await page.locator('#weld-end').selectOption('13');
+  await expect(page.locator('#weld-range-info')).toContainText('269');
+  await page.locator('#weld-name').fill('完整焊路');
+  await page.locator('#weld-pause').fill('2.5');
+  await page.locator('#weld-add').click();
+  await expect(page.locator('#weld-list .weld-card')).toHaveCount(1);
+  await page.locator('#weld-reverse').click();
+  await page.locator('#weld-name').fill('返回焊路');
+  await page.locator('#weld-pause').fill('5');
+  await page.locator('#weld-add').click();
+  await expect(page.locator('#weld-list .weld-card')).toHaveCount(2);
+  await page.locator('#weld-list .weld-card').last().getByRole('button',{name:'上移',exact:true}).click();
+  await expect(page.locator('#weld-list .weld-card').first()).toContainText('返回焊路');
+  await page.locator('#weld-list .weld-card').last().getByRole('button',{name:'编辑',exact:true}).click();
+  await expect(page.locator('#weld-pause')).toHaveValue('2.5');
+  await page.locator('#weld-pause').fill('4');
+  await page.locator('#weld-add').click();
+  await expect(page.locator('#weld-list .weld-card')).toHaveCount(2);
+  await page.locator('#weld-list .weld-card').last().getByRole('button',{name:'编辑',exact:true}).click();
+  await expect(page.locator('#export')).toBeDisabled();
+  await page.locator('#weld-cancel').click();
+  await expect(page.locator('#export')).toBeEnabled();
+  const coloredPixels=()=>page.evaluate(()=>new Promise<number>(resolve=>requestAnimationFrame(()=>{
+    const gl=document.querySelector('canvas')!.getContext('webgl2')!;
+    const data=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);
+    gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,data);
+    let count=0;
+    for(let index=0;index<data.length;index+=4) if(data[index]<220 || data[index+1]<220 || data[index+2]<220) count++;
+    resolve(count);
+  })));
+  const before=await coloredPixels();
+  expect(before).toBeGreaterThan(1000);
+  await page.getByRole('button',{name:'模型',exact:true}).click();
+  await page.locator('#length-unit').selectOption('m');
+  await expect(page.locator('#busy')).toBeHidden();
+  await page.getByRole('button',{name:'生成焊路',exact:true}).click();
+  await expect.poll(coloredPixels).toBeGreaterThan(before*0.9);
+  await expect(page.locator('#weld-list .weld-card').last()).toContainText('4 s');
+  const download=page.waitForEvent('download');
+  const request=page.waitForRequest(request=>request.url().endsWith('/api/weld-script'));
+  await page.locator('#export').click();
+  const payload=(await request).postDataJSON();
+  expect(payload.paths.map((path:any)=>path.name)).toEqual(['返回焊路','完整焊路']);
+  expect(payload.paths.map((path:any)=>path.pause_after)).toEqual([5,4]);
+  expect(payload.paths[1].points).toHaveLength(269);
+  expect(payload.paths[1].points[0][2]).toBe(992.549);
+  const output=await download;
+  expect(output.suggestedFilename()).toBe('generate_weld_paths.py');
+  const source=await readFile((await output.path())!,'utf8');
+  expect(source.length).toBeGreaterThan(10000);
+  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:'删除',exact:true}).click();
+  await expect(page.locator('#weld-list .weld-card')).toHaveCount(1);
+  for(const width of [960,768,430]) {
+    await page.setViewportSize({width,height:960});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('编辑后刷新与关闭需要确认，取消保留输入', async ({page}) => {
+  await page.goto('/#token=' + process.env.SFMARC_TEST_TOKEN);
+  await page.getByRole('button',{name:'面载荷',exact:true}).click();
+  await page.reload();
+  await page.getByRole('button',{name:'面载荷',exact:true}).click();
+  await page.locator('#load-name').fill('需要保留的载荷');
+  const reloadDialog=page.waitForEvent('dialog',{timeout:5000});
+  await page.evaluate(()=>{setTimeout(()=>location.reload(),0);});
+  const refresh=await reloadDialog;
+  expect(refresh.type()).toBe('beforeunload');
+  await refresh.dismiss();
+  await expect(page.locator('#load-name')).toHaveValue('需要保留的载荷');
+  const closeDialog=page.waitForEvent('dialog',{timeout:5000});
+  await page.close({runBeforeUnload:true});
+  const closing=await closeDialog;
+  expect(closing.type()).toBe('beforeunload');
+  await closing.dismiss();
+  expect(page.isClosed()).toBe(false);
+  await expect(page.locator('#load-name')).toHaveValue('需要保留的载荷');
+  const confirmDialog=page.waitForEvent('dialog',{timeout:5000});
+  await page.evaluate(()=>{setTimeout(()=>location.reload(),0);});
+  const confirmation=await confirmDialog;
+  const reloaded=page.waitForEvent('domcontentloaded');
+  await confirmation.accept();
+  await reloaded;
+  await expect(page.locator('#load-name')).toHaveValue('载荷 1');
+  await page.getByRole('button',{name:'面载荷',exact:true}).click();
+  await page.locator('#load-name').fill('关闭前确认');
+  const lastDialog=page.waitForEvent('dialog',{timeout:5000});
+  await page.close({runBeforeUnload:true});
+  const last=await lastDialog;
+  const closed=page.waitForEvent('close');
+  await last.accept();
+  await closed;
+  expect(page.isClosed()).toBe(true);
+});
 
 async function frameSum(page: Page) {
   return page.evaluate(()=>new Promise<number>(resolve=>requestAnimationFrame(()=>{
@@ -22,7 +199,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   const modelTool=page.getByRole('button',{name:'模型',exact:true});
   const loadTool=page.getByRole('button',{name:'面载荷',exact:true});
   await expect(modelTool).toHaveAttribute('aria-pressed','true');
-  await expect(page.locator('.right')).toBeHidden();
+  await expect(page.locator('aside[data-tool=surface-load]')).toBeHidden();
   await expect(page.locator('.selection-bar')).toBeHidden();
   await expect(page.locator('#empty h1')).toHaveText('打开模型');
   await expect(page.locator('.eyebrow, .help, .local, #unit-confirm, #solver-info, #material-info')).toHaveCount(0);
@@ -94,7 +271,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   const modelWidth=(await canvas.boundingBox())!.width;
   await loadTool.click();
   await expect(loadTool).toHaveAttribute('aria-pressed','true');
-  await expect(page.locator('.right')).toBeVisible();
+  await expect(page.locator('aside[data-tool=surface-load]')).toBeVisible();
   await expect(page.locator('.selection-bar')).toBeVisible();
   expect((await canvas.boundingBox())!.width).toBeLessThan(modelWidth);
   const box = (await canvas.boundingBox())!;
@@ -124,7 +301,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   const force=await page.locator('#force-info').textContent();
   const previewFrame=await frameSum(page);
   await modelTool.click();
-  await expect(page.locator('.right')).toBeHidden();
+  await expect(page.locator('aside[data-tool=surface-load]')).toBeHidden();
   const requestsBefore=selectionRequests;
   await canvas.click();
   expect(selectionRequests).toBe(requestsBefore);

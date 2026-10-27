@@ -1,4 +1,5 @@
 from io import BytesIO
+import csv
 import json
 from pathlib import Path
 import re
@@ -15,8 +16,10 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from .deck import Deck, safe_path
+from .background import BackgroundModel
 from .geometry import SurfaceModel
 from .loads import LoadSpec, export_model, preview
+from .welding import WeldPlan, generate_script, read_paths
 
 
 class LoadInput(BaseModel):
@@ -70,6 +73,7 @@ def create_app(token: str):
         return response
 
     @app.exception_handler(ValueError)
+    @app.exception_handler(csv.Error)
     async def invalid_input(request: Request, error: ValueError):
         return JSONResponse({"detail": str(error)}, status_code=400)
 
@@ -82,7 +86,13 @@ def create_app(token: str):
 
     def metadata():
         model = app.state.model
+        if isinstance(model, BackgroundModel):
+            return {"id": app.state.model_id, "filename": model.filename, "nodes": len(model.points),
+                    "elements": model.element_count, "faces": len(model.faces), "supports_loads": False,
+                    "length_unit": model.length_unit, "cases": [],
+                    "bodies": [{"id": key, "name": value} for key, value in model.body_names.items()]}
         return {"id": app.state.model_id, "filename": model.deck.root,
+                "supports_loads": True,
                 "nodes": len(model.points), "elements": len(model.deck.mesh.elements), "faces": len(model.faces),
                 "bodies": [{"id": key, "name": value} for key, value in model.body_names.items()],
                 "cases": [{"id": i, "name": c.name, "initial": c.initial} for i, c in enumerate(model.deck.cases)],
@@ -131,17 +141,44 @@ def create_app(token: str):
                 "triangle_faces": model.triangle_faces.tolist(), "body_ids": model.body_ids.tolist(),
                 "edges": model.edges.ravel().tolist(), "edge_bodies": model.edge_bodies.tolist()}
 
+    @app.post("/api/background")
+    async def import_background(request: Request):
+        if app.state.importing:
+            raise HTTPException(409, "模型正在读取，请稍候")
+        app.state.importing = True
+        try:
+            async with request.form(max_files=1, max_fields=1, max_part_size=512*1024*1024) as form:
+                uploaded = form.get("file")
+                if not isinstance(uploaded, UploadFile) or not uploaded.filename:
+                    raise ValueError("请选择网格或 STEP 文件")
+                data = await uploaded.read(512*1024*1024+1)
+                if len(data) > 512*1024*1024:
+                    raise ValueError("文件不能超过 512 MB")
+                file_format = form.get("format") or Path(uploaded.filename).suffix[1:].lower()
+                model = await run_in_threadpool(BackgroundModel, data, uploaded.filename, file_format)
+            app.state.model = model
+            app.state.model_id = uuid4().hex
+            return metadata()
+        finally:
+            app.state.importing = False
+
+    def load_model(request):
+        model = current(request)
+        if isinstance(model, BackgroundModel):
+            raise HTTPException(409, "此模型用于焊路几何背景；面载荷需要导入 Marc DAT")
+        return model
+
     @app.post("/api/select")
     def select(request: Request, data: SelectionInput):
-        return {"faces": current(request).select(data.seed, data.angle)}
+        return {"faces": load_model(request).select(data.seed, data.angle)}
 
     @app.post("/api/preview")
     def calculate(request: Request, data: LoadInput):
-        return preview(current(request), LoadSpec(**data.model_dump()))
+        return preview(load_model(request), LoadSpec(**data.model_dump()))
 
     @app.post("/api/export")
     def export(request: Request, data: ExportInput):
-        model = current(request)
+        model = load_model(request)
         files, report = export_model(model, [LoadSpec(**item.model_dump()) for item in data.loads])
         output = BytesIO()
         with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
@@ -150,9 +187,39 @@ def create_app(token: str):
             archive.writestr("sfmarc-loads-report.json", json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"))
         return Response(output.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="sfmarc_loads.zip"'})
 
+    @app.post("/api/weld-paths")
+    async def import_weld_paths(request: Request):
+        paths = []
+        total = 0
+        async with request.form(max_files=256, max_fields=1, max_part_size=20*1024*1024) as form:
+            unit = form.get("unit")
+            for uploaded in form.getlist("files"):
+                if not isinstance(uploaded, UploadFile) or not uploaded.filename:
+                    raise ValueError("请选择 CSV 文件")
+                data = await uploaded.read(20*1024*1024+1)
+                total += len(data)
+                if total > 20*1024*1024:
+                    raise ValueError("CSV 文件组不能超过 20 MB")
+                paths.extend(await run_in_threadpool(read_paths, data, uploaded.filename, unit))
+        if not paths:
+            raise ValueError("请选择 CSV 文件")
+        if len(paths) > 1000 or sum(len(path["points"]) for path in paths) > 100000:
+            raise ValueError("单次导入不能超过 1000 条路径或 10 万个点")
+        return {"paths": paths}
+
+    @app.post("/api/weld-script")
+    def export_weld_script(data: WeldPlan):
+        return Response(generate_script(data), media_type="text/x-python; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="generate_weld_paths.py"'})
+
     @app.get("/")
     def index():
         return FileResponse(web / "index.html")
+
+    @app.get("/icon.svg")
+    @app.get("/icon.ico")
+    def icon(request: Request):
+        return FileResponse(web / request.url.path[1:])
 
     app.mount("/assets", StaticFiles(directory=web / "assets", check_dir=False), name="assets")
     return app

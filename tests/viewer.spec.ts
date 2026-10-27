@@ -10,6 +10,29 @@ test.beforeEach(async ({page}) => {
   await page.evaluate(async () => { await (window as any).ready; });
 });
 
+test('焊枪与光源沿物理坐标移动，停止期间关闭光源',async({page})=>{
+  const result=await page.evaluate(()=>{
+    const viewer=(window as any).viewer;
+    const heat={power_w:250,velocity:50,efficiency:.7,conical_upper_radius:.4,conical_lower_radius:.2,conical_depth:.8,conical_gaussian_parameter:1,volume_heat_fraction:.8,disc_radius:.4,surface_depth:.1,disc_gaussian_parameter:1};
+    viewer.configureWeldPreview(heat,[0,0,1],.001);
+    viewer.showWeldFrame([10,20,30],.001,true);
+    const first=viewer.torch.position.clone().add(viewer.origin).toArray();
+    const cone=viewer.heat.children[0];
+    const direction=viewer.origin.clone().set(0,1,0).applyQuaternion(viewer.torch.quaternion).toArray();
+    const light=viewer.weldLight;
+    const world=light.getWorldPosition(viewer.origin.clone()).toArray();
+    viewer.showWeldFrame([15,20,30],.001,true);
+    const moved=light.getWorldPosition(viewer.origin.clone()).toArray();
+    viewer.showWeldFrame([15,20,30],.001,false);
+    const hidden=!light.parent.visible;
+    return {first,direction,upper:cone.geometry.parameters.radiusTop,depth:cone.geometry.parameters.height,movement:moved[0]-world[0],hidden,light:light.isPointLight,intensity:light.intensity};
+  });
+  result.first.forEach((value:number,index:number)=>expect(value).toBeCloseTo([.01,.02,.03][index],10));
+  expect(result.upper).toBeCloseTo(.0004,10);expect(result.depth).toBeCloseTo(.0008,10);
+  expect(result.direction[2]).toBeCloseTo(1,10);expect(result.movement).toBeCloseTo(.005,10);
+  expect(result.hidden).toBe(true);expect(result.light).toBe(true);expect(result.intensity).toBeGreaterThan(0);
+});
+
 async function coastFrames(page: Page) {
   await page.evaluate(() => {
     const viewer = (window as any).viewer;
@@ -34,6 +57,51 @@ async function coastFrames(page: Page) {
     throw new Error('拖动后的旋转未在检查范围内停止');
   });
 }
+
+test('路径按模型坐标显示，共用点优先当前路径并只拾取已有点', async ({page}) => {
+  const point=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    const mesh=await (await fetch('/work/viewer-mesh.json')).json();
+    const xyz=mesh.points.slice(0,3);
+    const other=mesh.points.slice(3,6);
+    viewer.setPaths([{id:0,points:[xyz,other]},{id:1,points:[xyz,other]}],1,[0,1],(path:number,index:number)=>{(window as any).pathPick={path,index};});
+    viewer.fitPaths();
+    viewer.camera.updateMatrixWorld();
+    const geometry=viewer.paths.children[1].geometry.getAttribute('position');
+    const centered=viewer.origin.clone().fromArray(xyz).sub(viewer.origin);
+    const distance=centered.distanceTo(viewer.origin.clone().fromBufferAttribute(geometry,0));
+    const projected=centered.clone().project(viewer.camera);
+    return {x:(projected.x+1)*500,y:(1-projected.y)*380,distance};
+  });
+  expect(point.distance).toBeLessThan(1e-6);
+  await page.mouse.click(point.x,point.y);
+  expect(await page.evaluate(()=>(window as any).pathPick)).toEqual({path:1,index:0});
+  await page.evaluate(()=>{(window as any).pathPick=null;(window as any).viewer.showPaths(false);});
+  await page.mouse.click(point.x,point.y);
+  expect(await page.evaluate(()=>(window as any).pathPick)).toBeNull();
+});
+
+test('定位短焊路后保留模型显示的深度范围', async ({page}) => {
+  const depths=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    const mesh=await (await fetch('/work/viewer-mesh.json')).json();
+    let top=0;
+    for(let index=3;index<mesh.points.length;index+=3) if(mesh.points[index+2]>mesh.points[top+2]) top=index;
+    const first=mesh.points.slice(top,top+3);
+    let nearest:number[] | null=null,distance=Infinity;
+    for(let index=0;index<mesh.points.length;index+=3) {
+      const point=mesh.points.slice(index,index+3);
+      const gap=Math.hypot(...point.map((value:number,axis:number)=>value-first[axis]));
+      if(gap>0 && gap<distance) {nearest=point;distance=gap;}
+    }
+    if(!nearest) throw new Error('模型顶部没有可用路径点');
+    viewer.setPaths([{id:0,points:[first,nearest]}],0,[0,1],()=>{});
+    viewer.fitPaths(); viewer.fit('xy'); viewer.updateClipping();
+    const required=Math.max(...viewer.meshes.filter((mesh:any)=>mesh.visible).map((mesh:any)=>-mesh.geometry.boundingBox.clone().applyMatrix4(viewer.camera.matrixWorldInverse).min.z));
+    return {far:viewer.camera.far,required};
+  });
+  expect(depths.far).toBeGreaterThanOrEqual(depths.required);
+});
 
 test('拖动惯性在约三十帧内衰减到百分之五', async ({page}) => {
   expect(await coastFrames(page)).toBeGreaterThanOrEqual(29);
@@ -251,6 +319,32 @@ test('只显示边缘实体时围绕可见实体中心旋转', async ({page}) =>
   expect(restored.visible).toBe(1);
   expect(restored.error).toBeLessThan(initial.size*1e-6);
   expect(restored.camera.every(Number.isFinite)).toBe(true);
+});
+
+test('实体显示开关保留旋转、缩放与平移，回到中心使用可见实体',async({page})=>{
+  await page.mouse.move(450,380);await page.mouse.down({button:'right'});
+  await page.mouse.move(560,420,{steps:10});await page.mouse.up({button:'right'});
+  await page.mouse.wheel(0,-120);
+  const result=await page.evaluate(async()=>{
+    for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);
+    const viewer=(window as any).viewer;
+    const state=()=>({position:viewer.camera.position.toArray(),rotation:viewer.camera.quaternion.toArray(),offset:viewer.viewOffset.toArray(),target:viewer.controls.target.toArray()});
+    const before=state();
+    const chosen=viewer.meshes.at(-1);
+    for(const mesh of viewer.meshes) viewer.showBody(mesh.userData.body,mesh===chosen);
+    viewer.controls.update();const hidden=state();
+    viewer.showBody(chosen.userData.body,false);viewer.showBody(chosen.userData.body,true);
+    viewer.controls.update();const shown=state();
+    const distance=viewer.camera.position.distanceTo(viewer.controls.target);
+    viewer.recenter();
+    const center=chosen.geometry.boundingBox.getCenter(viewer.origin.clone());
+    return {before,hidden,shown,centerError:center.distanceTo(viewer.controls.target),distance,newDistance:viewer.camera.position.distanceTo(viewer.controls.target),offset:viewer.viewOffset.toArray()};
+  });
+  for(const state of [result.hidden,result.shown]) {
+    expect(state.offset).toEqual(result.before.offset);
+    for(const key of ['position','rotation','target'] as const) state[key].forEach((value:number,index:number)=>expect(value).toBeCloseTo(result.before[key][index],9));
+  }
+  expect(result.centerError).toBeLessThan(1e-8);expect(result.newDistance).toBeCloseTo(result.distance,9);expect(result.offset).toEqual([0,0]);
 });
 
 test('滚轮放大达到上限后停止且能够立即缩小', async ({page}) => {
