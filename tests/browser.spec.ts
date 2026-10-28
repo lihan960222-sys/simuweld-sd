@@ -8,11 +8,13 @@ test('几何背景、热源比例图、移动预览与完整参数导出',async(
   expect((await page.request.get('/icon.svg')).ok()).toBe(true);
   for(const extension of ['inp','bdf','stp']) {
     await page.locator('#open-model').click();
+    await page.locator('#import-units').selectOption('mm');
     await page.locator('#file').setInputFiles('work/geometry-tests/two_blocks.'+extension);
     await expect(page.locator('#model-info')).toContainText('two_blocks.'+extension);
     await expect(page.locator('#body-list .body-card')).toHaveCount(2);
     await expect(page.locator('#busy')).toBeHidden();
   }
+  await page.locator('.body-card[data-body-id="0"] summary').press('Enter');
   await page.getByLabel('实体 1 半透明',{exact:true}).check();
   await page.getByLabel('实体 1 透明度',{exact:true}).fill('42');
   await page.getByLabel('实体 1 颜色',{exact:true}).fill('#e5bb85');
@@ -32,7 +34,7 @@ test('几何背景、热源比例图、移动预览与完整参数导出',async(
   await page.locator('#weld-pause').fill('2');await page.locator('#weld-add').click();
   await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
   await expect(page.locator('#weld-source-info')).toContainText('295');
-  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:'编辑',exact:true}).click();
+  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:/^编辑 /}).click();
   await expect(page.locator('#weld-play')).toBeDisabled();
   await page.locator('#weld-cancel').click();
   await expect(page.locator('#weld-play')).toBeEnabled();
@@ -43,7 +45,7 @@ test('几何背景、热源比例图、移动预览与完整参数导出',async(
   await expect(page.locator('#weld-time')).toContainText('焊后停止');
   await page.locator('#weld-reset').click();
   await page.locator('#weld-play').click();
-  await expect(page.locator('#weld-play')).toHaveText('暂停');
+  await expect(page.locator('#weld-play')).toHaveAccessibleName('暂停');
   await expect.poll(async()=>Number(await page.locator('#weld-progress').inputValue())).toBeGreaterThan(0.1);
   await page.locator('#weld-play').click();
   const paused=await page.locator('#weld-progress').inputValue();
@@ -119,7 +121,7 @@ test('CSV 焊路按范围、顺序和停止时间导出脚本', async ({page}) =
   page.on('pageerror', error=>errors.push(error.message));
   await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
   await page.getByRole('button',{name:'生成焊路',exact:true}).click();
-  await expect(page.locator('#export')).toHaveText('导出 Python 脚本 ↗');
+  await expect(page.locator('#export')).toHaveAccessibleName('导出 Python 脚本');
   await expect(page.locator('#export')).toBeDisabled();
   await page.locator('#weld-heat-save').click();
   await page.locator('#weld-files').setInputFiles(process.env.SFMARC_TEST_WELD_CSV!);
@@ -137,14 +139,14 @@ test('CSV 焊路按范围、顺序和停止时间导出脚本', async ({page}) =
   await page.locator('#weld-pause').fill('5');
   await page.locator('#weld-add').click();
   await expect(page.locator('#weld-list .weld-card')).toHaveCount(2);
-  await page.locator('#weld-list .weld-card').last().getByRole('button',{name:'上移',exact:true}).click();
+  await page.locator('#weld-list .weld-card').last().locator('.weld-grip').press('ArrowUp');
   await expect(page.locator('#weld-list .weld-card').first()).toContainText('返回焊路');
-  await page.locator('#weld-list .weld-card').last().getByRole('button',{name:'编辑',exact:true}).click();
+  await page.locator('#weld-list .weld-card').last().getByRole('button',{name:/^编辑 /}).click();
   await expect(page.locator('#weld-pause')).toHaveValue('2.5');
   await page.locator('#weld-pause').fill('4');
   await page.locator('#weld-add').click();
   await expect(page.locator('#weld-list .weld-card')).toHaveCount(2);
-  await page.locator('#weld-list .weld-card').last().getByRole('button',{name:'编辑',exact:true}).click();
+  await page.locator('#weld-list .weld-card').last().getByRole('button',{name:/^编辑 /}).click();
   await expect(page.locator('#export')).toBeDisabled();
   await page.locator('#weld-cancel').click();
   await expect(page.locator('#export')).toBeEnabled();
@@ -158,9 +160,10 @@ test('CSV 焊路按范围、顺序和停止时间导出脚本', async ({page}) =
   })));
   const before=await coloredPixels();
   expect(before).toBeGreaterThan(1000);
-  await page.getByRole('button',{name:'模型',exact:true}).click();
-  await page.locator('#length-unit').selectOption('m');
-  await expect(page.locator('#busy')).toBeHidden();
+  await page.getByRole('button',{name:'模型查看',exact:true}).click();
+  await page.locator('#open-model').click();
+  await page.locator('#import-units').selectOption('m');
+  await page.locator('#close-model-dialog').click();
   await page.getByRole('button',{name:'生成焊路',exact:true}).click();
   await expect.poll(coloredPixels).toBeGreaterThan(before*0.9);
   await expect(page.locator('#weld-list .weld-card').last()).toContainText('4 s');
@@ -176,7 +179,7 @@ test('CSV 焊路按范围、顺序和停止时间导出脚本', async ({page}) =
   expect(output.suggestedFilename()).toBe('generate_weld_paths.py');
   const source=await readFile((await output.path())!,'utf8');
   expect(source.length).toBeGreaterThan(10000);
-  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:'删除',exact:true}).click();
+  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:/^删除 /}).click();
   await expect(page.locator('#weld-list .weld-card')).toHaveCount(1);
   for(const width of [960,768,430]) {
     await page.setViewportSize({width,height:960});
@@ -236,10 +239,11 @@ test('模型与 CSV 在模块切换后保留，焊路分别使用不同热源',a
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
   await page.locator('#open-model').click();
+  await page.locator('#import-units').selectOption('mm');
   await page.locator('#file').setInputFiles('work/elemtype7_tension.dat');
   await expect(page.locator('#model-info')).toContainText('elemtype7_tension.dat');
   await expect(page.locator('#busy')).toBeHidden();
-  await page.locator('#edges').check();
+  await page.locator('#render-mode').selectOption('solid-edges');
   await page.getByRole('button',{name:'面载荷',exact:true}).click();
   await page.locator('[data-view=xy]').click();
   const before=await frameSum(page);
@@ -268,13 +272,14 @@ test('模型与 CSV 在模块切换后保留，焊路分别使用不同热源',a
   await page.locator('#weld-heat-name').fill('Laser-B-renamed');await page.locator('#weld-heat-save').click();
   await expect(page.getByLabel('第二条焊路 热源',{exact:true})).toHaveValue('Laser-B-renamed');
   await page.locator('#weld-heat-name').fill('Laser-B');await page.locator('#weld-heat-save').click();
-  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:'编辑',exact:true}).click();
+  await page.locator('#weld-list .weld-card').first().getByRole('button',{name:/^编辑 /}).click();
   await page.getByLabel('第一条焊路 热源',{exact:true}).selectOption('Laser-B');
   await expect(page.locator('#weld-entry-heat')).toHaveValue('Laser-B');
   await page.locator('#weld-pause').fill('1');await page.locator('#weld-add').click();
   await expect(page.getByLabel('第一条焊路 热源',{exact:true})).toHaveValue('Laser-B');
   await page.getByLabel('第一条焊路 热源',{exact:true}).selectOption('Laser-A');
-  for(const module of ['面载荷','模型','面载荷']) {
+  const combined=await frameSum(page);
+  for(const module of ['面载荷','模型查看','面载荷']) {
     await page.getByRole('button',{name:module,exact:true}).click();
     await page.getByRole('button',{name:'生成焊路',exact:true}).click();
     await expect(page.locator('#weld-source-info')).toContainText('295');
@@ -282,10 +287,10 @@ test('模型与 CSV 在模块切换后保留，焊路分别使用不同热源',a
     await expect(page.locator('#weld-end')).toHaveValue('281');
     await expect(page.locator('#weld-list .weld-card')).toHaveCount(2);
     await expect(page.locator('#weld-heat-profile option')).toHaveCount(2);
-    await expect.poll(()=>frameSum(page)).toBe(before);
+    await expect.poll(()=>frameSum(page)).toBe(combined);
   }
   await page.locator('[data-view=xy]').click();
-  await expect.poll(()=>frameSum(page)).toBe(before);
+  await expect.poll(()=>frameSum(page)).toBe(combined);
   await page.locator('#weld-reset').click();
   const expectedDuration=205.4898146957904/50+1+205.4898146957904/25+2;
   await expect(page.locator('#weld-time')).toContainText(expectedDuration.toFixed(3)+' s');
@@ -313,7 +318,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(page).toHaveTitle('SIMUWELD SD');
   await expect(page.locator('.brand')).toContainText('SIMUWELD SD');
   await expect(page.getByText('面载荷编辑',{exact:true})).toHaveCount(0);
-  const modelTool=page.getByRole('button',{name:'模型',exact:true});
+  const modelTool=page.getByRole('button',{name:'模型查看',exact:true});
   const loadTool=page.getByRole('button',{name:'面载荷',exact:true});
   await expect(modelTool).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('aside[data-tool=surface-load]')).toBeHidden();
@@ -321,8 +326,8 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(page.locator('#empty h1')).toHaveText('打开模型');
   await expect(page.locator('.eyebrow, .help, .local, #unit-confirm, #solver-info, #material-info')).toHaveCount(0);
   await expect(page.locator('footer')).toHaveText('copyright LH');
-  await expect(page.locator('.left details')).toHaveCount(0);
-  const viewButtons=page.locator('.view-tools button');
+  await expect(page.locator('.left details.panel-group')).toHaveCount(1);
+  const viewButtons=page.locator('.view-tools button:not(#explode)');
   await expect(viewButtons).toHaveCount(4);
   for(const button of await viewButtons.all()) {
     await expect(button.locator('svg')).toHaveCount(1);
@@ -332,15 +337,16 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   for(const plane of ['xy','xz','yz']) await expect(page.locator(`[data-view=${plane}] svg text`)).toHaveText(plane.toUpperCase().split(''));
   await expect(page.getByRole('img',{name:'坐标轴方向'})).toBeVisible();
   await expect(page.locator('.workspace')).toHaveCSS('background-color','rgb(237, 242, 246)');
-  await expect(page.locator('#length-unit')).toHaveValue('mm');
-  await expect(page.locator('#force-unit')).toHaveValue('N');
   await expect(page.locator('#pressure-unit')).toHaveValue('MPa');
-  await expect(page.locator('.units')).toContainText('默认单位制：mm · t · N · MPa');
+  await page.locator('#open-model').click();
+  await expect(page.locator('#import-units')).toHaveValue('m');
+  await page.locator('#import-units').selectOption('mm');
   await page.locator('#file').setInputFiles(process.env.SFMARC_TEST_DAT!);
   await expect(page.locator('#model-info')).toContainText('163,924', {timeout: 90000});
   await expect(page.locator('#busy')).toBeHidden();
   await expect(page.locator('.body-card')).toHaveCount(7);
   const body=page.locator('.body-card').first();
+  await body.locator('summary').press('Enter');
   await body.locator('input[type=color]').fill('#e45d41');
   await expect(body.locator('input[type=color]')).toHaveValue('#e45d41');
   const opaqueFrame=await frameSum(page);
@@ -368,6 +374,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(transparency).toHaveValue('79');
   await expect(body.locator('output')).toHaveText('79%');
   const otherBody=page.locator('.body-card').nth(1);
+  await otherBody.locator('summary').press('Enter');
   await otherBody.getByRole('checkbox',{name:/半透明/}).check();
   await expect(otherBody.getByRole('slider',{name:/透明度/})).toHaveValue('65');
   await otherBody.getByRole('checkbox',{name:/半透明/}).uncheck();
@@ -376,9 +383,9 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   const centeredFrame=await frameSum(page);
   await page.getByRole('button',{name:'回到中心'}).click();
   expect(await frameSum(page)).toBe(centeredFrame);
-  await page.locator('#edges').check();
+  await page.locator('#render-mode').selectOption('solid-edges');
   expect(await frameSum(page)).not.toBe(centeredFrame);
-  await page.locator('#edges').uncheck();
+  await page.locator('#render-mode').selectOption('solid');
   const canvas = page.locator('canvas');
   let selectionRequests=0;
   page.on('request',request=>{if(request.url().endsWith('/api/select'))selectionRequests++;});
@@ -399,16 +406,21 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   }
   await expect.poll(async()=>Number(await page.locator('#selected-count').textContent())).toBeGreaterThan(0);
   await page.locator('#mode').selectOption('manual');
-  await page.locator('#dx').fill('3');
-  await page.locator('#dy').fill('0');
-  await page.locator('#dz').fill('-4');
-  await page.locator('#magnitude').fill('2');
+  await expect(page.locator('#busy')).toBeHidden();
+  for(const [id,value] of [['dx','3'],['dy','0'],['dz','-4'],['magnitude','2']]) {
+    await page.locator('#'+id).fill(value);
+    await page.locator('#'+id).press('Tab');
+    await expect(page.locator('#busy')).toBeHidden();
+    await expect(page.locator('#'+id)).toHaveValue(value);
+  }
   await page.locator('#case-mode').selectOption('custom');
   const firstCase=page.locator('#case-list input:checked').first();
   const excludedCase=await firstCase.getAttribute('value');
   await firstCase.uncheck();
-  const previewResponse=page.waitForResponse(response=>response.url().endsWith('/api/preview'));
-  await page.locator('#preview').click();
+  await expect(page.locator('#busy')).toBeHidden();
+  await expect(page.locator('#magnitude')).toHaveValue('2');
+  const previewResponse=page.waitForResponse(response=>response.url().endsWith('/api/preview') && response.request().postDataJSON().magnitude===2);
+  await page.locator('#magnitude').dispatchEvent('change');
   const preview=await (await previewResponse).json();
   expect(preview.pressure).toBe(2);
   expect(preview.area_unit).toBe('mm²');
@@ -439,17 +451,13 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(page.locator('#export')).toBeEnabled();
   await modelTool.click();
   await expect(page.locator('#export')).toBeEnabled();
-  await page.locator('#length-unit').selectOption('m');
-  await expect(page.locator('#busy')).toBeHidden();
-  await expect(page.locator('#length-unit')).toHaveValue('m');
+  await expect(page.locator('#import-units')).toHaveValue('mm');
   await expect(page.locator('#export')).toBeEnabled();
   await loadTool.click();
-  await page.locator('#length-unit').selectOption('mm');
-  await expect(page.locator('#busy')).toBeHidden();
   await expect(page.locator('#export')).toBeEnabled();
-  await page.getByRole('button', {name: '编辑', exact: true}).click();
+  await page.getByRole('button', {name: '编辑 载荷 1', exact: true}).click();
   await expect(page.locator('#busy')).toBeHidden();
-  await expect(page.locator('#length-unit')).toHaveValue('mm');
+  await expect(page.locator('#import-units')).toHaveValue('mm');
   await page.locator('#load-name').fill('夹紧压力');
   await modelTool.click();
   await loadTool.click();
@@ -468,7 +476,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   expect((await download).suggestedFilename()).toMatch(/_loads\.zip$/);
   const notice=page.locator('#message');
   await expect(notice).toBeVisible();
-  await page.locator('#preview').click();
+  await page.locator('#show-all-loads').click();
   await expect.poll(()=>notice.evaluate(element=>Number(getComputedStyle(element).opacity)),{intervals:[16]}).toBeLessThan(1);
   await expect(notice).toBeVisible();
   await expect(notice).toBeHidden();
@@ -477,7 +485,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await nextDownload;
   await expect(notice).toBeVisible();
   await page.locator('#clear').click();
-  await page.locator('#preview').click();
+  await page.locator('#save-load').click();
   await expect(notice).toContainText('选择');
   await page.evaluate(async()=>{for(let i=0;i<30;i++) await new Promise(requestAnimationFrame);});
   await expect(notice).toBeVisible();

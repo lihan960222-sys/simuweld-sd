@@ -1,0 +1,16 @@
+.heat-parameter-group { border-bottom: 1px solid var(--color-rule); padding: 7px 0; }
+.heat-parameter-group > summary { cursor: pointer; font-size: 12px; font-weight: 600; padding: 3px 0; }
+.heat-parameter-group .heat-fields { margin-top: 7px; }
+.heat-preview { margin: 10px 0 0; padding: 8px; border: 1px solid var(--color-rule); border-radius: var(--radius-panel); background: var(--color-panel); }
+.heat-preview #heat-diagram { display: block; width: 100%; max-height: 210px; margin: 0; }
+.heat-legend { font-size: 11px; line-height: 1.5; }
+.heat-legend-materials { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.heat-legend-materials span { display: inline-flex; align-items: center; gap: 5px; }
+.heat-legend-materials i { width: 10px; height: 10px; border-radius: 2px; }
+.heat-cone-swatch { background: #f8ad66; border: 1px solid #bc6328; }
+.heat-disc-swatch { background: #6ec9e3; border: 1px solid #1783a5; }
+.heat-legend dl { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px 12px; margin: 8px 0; }
+.heat-legend dl > div { min-width: 0; }
+.heat-legend dt { color: var(--color-muted); }
+.heat-legend dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.heat-legend p { margin: 5px 0 0; font-size: 10px; color: var(--color-muted); }

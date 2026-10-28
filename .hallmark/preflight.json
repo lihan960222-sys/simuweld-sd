@@ -1,0 +1,12 @@
+{
+  "scope": "app",
+  "theme": "brand",
+  "genre": "modern-minimal",
+  "material": "SIMUWELD SD 激光焊接图标、真实 DAT 模型与现有功能表单",
+  "audience": "需要浏览模型、设置面载荷与生成焊路的工程人员",
+  "use": "导入本机模型并导出 DAT 文件组或焊路 Python 脚本",
+  "preserved": ["frontend/main.ts:21 品牌与功能入口", "frontend/viewer.ts 三维显示与坐标处理", "frontend/welding.ts 焊路与热源设置", "public/icon.svg 激光焊接图标"],
+  "introduced": ["frontend/tokens.css 共享样式参数", "frontend/style.css 深色顶部栏与浅色工作区", "frontend/import.css 导入窗口样式"],
+  "reference": "https://github.com/Nutlope/hallmark",
+  "version": "2.0.0"
+}

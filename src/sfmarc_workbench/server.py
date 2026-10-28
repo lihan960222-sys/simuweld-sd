@@ -90,11 +90,13 @@ def create_app(token: str):
             return {"id": app.state.model_id, "filename": model.filename, "nodes": len(model.points),
                     "elements": model.element_count, "faces": len(model.faces), "supports_loads": False,
                     "length_unit": model.length_unit, "cases": [],
-                    "bodies": [{"id": key, "name": value} for key, value in model.body_names.items()]}
+                    "bodies": [{"id": key, "name": value, "volume": model.body_volumes[key]}
+                               for key, value in model.body_names.items()]}
         return {"id": app.state.model_id, "filename": model.deck.root,
                 "supports_loads": True,
                 "nodes": len(model.points), "elements": len(model.deck.mesh.elements), "faces": len(model.faces),
-                "bodies": [{"id": key, "name": value} for key, value in model.body_names.items()],
+                "bodies": [{"id": key, "name": value, "volume": model.body_volumes[key]}
+                           for key, value in model.body_names.items()],
                 "cases": [{"id": i, "name": c.name, "initial": c.initial} for i, c in enumerate(model.deck.cases)],
                 "follow": model.deck.follow, "materials": model.deck.materials, "missing_materials": model.deck.missing_materials,
                 "source_sha256": model.deck.digest}
@@ -103,6 +105,15 @@ def create_app(token: str):
     def get_model(request: Request):
         current(request)
         return metadata()
+
+    @app.post("/api/model/clear")
+    async def clear_model(request: Request):
+        current(request)
+        if app.state.importing:
+            raise HTTPException(409, "模型正在读取，请稍候")
+        app.state.model = None
+        app.state.model_id = None
+        return {"cleared": True}
 
     @app.post("/api/model")
     async def import_model(request: Request):

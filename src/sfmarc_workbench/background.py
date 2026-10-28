@@ -10,6 +10,8 @@ import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
+from .geometry import body_volumes
+
 
 class BackgroundModel:
     def __init__(self, data: bytes, filename: str, file_format: str):
@@ -77,4 +79,5 @@ class BackgroundModel:
                 triangle_faces.append(index)
         self.triangles = np.array(triangles, dtype=np.uint32)
         self.triangle_faces = np.array(triangle_faces, dtype=np.uint32)
+        self.body_volumes = body_volumes(self.points, self.triangles, self.body_ids[self.triangle_faces])
         self.length_unit = "mm" if file_format in ("stp", "step") else None

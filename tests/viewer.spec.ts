@@ -65,20 +65,21 @@ test('已焊接轨迹按热源宽度逐段着色，回到之前进度时恢复',
   expect(await page.evaluate(()=>(window as any).viewer.weldTrails.children.length)).toBe(0);
 });
 
-test('正常缩放下密集黄色路径点保留选择颜色，同时清楚显示已焊接的橙色',async({page})=>{
+test('预览隐藏密集路径选点，已焊位置显示红色，悬停不再点亮',async({page})=>{
   await page.evaluate(()=>{
     const viewer=(window as any).viewer,points=Array.from({length:301},(_,index)=>[index*200/300,0,0]);
     viewer.setPaths([{id:0,points:points.map(point=>point.map(value=>value*.001))}],0,[0,300],()=>{});
     viewer.fit('xy');viewer.fitPaths();viewer.setWeldTrails([{points,radius:.18,direction:[0,0,1]}],.001);
     viewer.showWeldProgress(0,150,[100,0,0]);
+    viewer.showPathSelection(false);
   });
-  const strip=(from:number,to:number)=>page.evaluate(({from,to})=>new Promise<{orange:number;yellow:number;width:number}>(resolve=>requestAnimationFrame(()=>{
+  const strip=(from:number,to:number)=>page.evaluate(({from,to})=>new Promise<{red:number;yellow:number;width:number}>(resolve=>requestAnimationFrame(()=>{
     const viewer=(window as any).viewer;viewer.updatePathCamera();
     const projected=(x:number)=>viewer.origin.clone().set(x*.001,0,0).sub(viewer.origin).project(viewer.pathCamera);
     const first=projected(from),last=projected(to),gl=viewer.renderer.getContext();
     const x=Math.ceil((first.x+1)*gl.drawingBufferWidth/2),right=Math.floor((last.x+1)*gl.drawingBufferWidth/2),y=Math.floor((first.y+1)*gl.drawingBufferHeight/2);
     const width=right-x+1,pixels=new Uint8Array(width*9*4);gl.readPixels(x,y-4,width,9,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
-    let orange=0,yellow=0;
+    let redCount=0,yellow=0;
     for(let column=0;column<width;column++) {
       let welded=false,selected=false;
       for(let row=0;row<9;row++) {
@@ -86,14 +87,14 @@ test('正常缩放下密集黄色路径点保留选择颜色，同时清楚显�
         if(red>180 && red-green>90 && blue>45) welded=true;
         if(red>200 && green>140 && green<175 && blue<50) selected=true;
       }
-      if(welded) orange++;if(selected) yellow++;
+      if(welded) redCount++;if(selected) yellow++;
     }
-    resolve({orange,yellow,width});
+    resolve({red:redCount,yellow,width});
   })),{from,to});
   const welded=await strip(10,90),future=await strip(110,190);
-  expect(welded.orange).toBeGreaterThan(welded.width*.75);
-  expect(welded.yellow).toBeGreaterThan(welded.width*.75);
-  expect(future.orange).toBe(0);
+  expect(welded.red).toBeGreaterThan(welded.width*.75);
+  expect(welded.yellow).toBe(0);
+  expect(future.red).toBe(0);expect(future.yellow).toBe(0);
   const pointer=await page.evaluate(()=>{
     const viewer=(window as any).viewer,point=viewer.origin.clone().set(.05,0,0).sub(viewer.origin).project(viewer.pathCamera);
     const rect=viewer.renderer.domElement.getBoundingClientRect();
@@ -106,10 +107,31 @@ test('正常缩放下密集黄色路径点保留选择颜色，同时清楚显�
     let sum=0;for(let index=0;index<pixels.length;index+=4) sum+=pixels[index]+pixels[index+1]+pixels[index+2];resolve(sum/9);
   })),pointer);
   const beforeHover=await brightness();await page.mouse.move(pointer.x,pointer.y);
-  expect(await brightness()).toBeGreaterThan(beforeHover+100);
+  expect(await brightness()).toBe(beforeHover);
+  expect(await page.evaluate(()=>(window as any).viewer.hoverPoint.visible)).toBe(false);
   await page.mouse.move(5,5);
   await page.evaluate(()=>(window as any).viewer.showWeldProgress(0,0,[0,0,0]));
-  expect((await strip(10,90)).orange).toBe(0);
+  expect((await strip(10,90)).red).toBe(0);
+});
+
+test('模型与路径共用坐标原点，远处路径不改变平面视图和旋转中心',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    const mesh=await (await fetch('/work/viewer-mesh.json')).json();
+    viewer.fit('xy');
+    const state=()=>({pivot:viewer.pivot.toArray(),target:viewer.controls.target.toArray(),camera:viewer.camera.position.toArray(),size:viewer.size});
+    const before=state(),points=[mesh.points.slice(0,3),mesh.points.slice(3,6)];
+    viewer.setPaths([{id:0,points}],0,[0,1],()=>{});
+    const positions=viewer.paths.children[0].geometry.getAttribute('position');
+    const coordinates=points.map((_:number[],index:number)=>viewer.origin.clone().fromBufferAttribute(positions,index).add(viewer.origin).toArray());
+    viewer.setPaths([{id:0,points:[[1000000,0,-1000000],[1000001,0,-1000000]]}],0,[0,1],()=>{});
+    const imported=state();viewer.recenter();const recentered=state();viewer.fit('xy');
+    return {before,imported,recentered,plane:state(),points,coordinates};
+  });
+  expect(result.imported).toEqual(result.before);
+  expect(result.recentered).toEqual(result.before);
+  expect(result.plane).toEqual(result.before);
+  for(let index=0;index<2;index++) for(let axis=0;axis<3;axis++) expect(result.coordinates[index][axis]).toBeCloseTo(result.points[index][axis],7);
 });
 
 test('焊枪与光源沿物理坐标移动，停止期间关闭光源',async({page})=>{
@@ -289,7 +311,10 @@ test('平移后的模型围绕自身中心连续翻转', async ({page}) => {
   await page.evaluate(async()=>{for(let i=0;i<90;i++) await new Promise(requestAnimationFrame);});
   const start = await page.evaluate(()=>{
     const viewer=(window as any).viewer;
-    return {center:viewer.origin.clone().set(0,0,0).project(viewer.camera).toArray(), eye:viewer.camera.position.clone().normalize().toArray()};
+    const bounds=viewer.meshes[0].geometry.boundingBox.clone().makeEmpty();
+    for(const mesh of viewer.meshes) if(mesh.visible) bounds.union(mesh.geometry.boundingBox);
+    const center=bounds.getCenter(viewer.origin.clone());
+    return {point:center.toArray(),center:center.clone().project(viewer.camera).toArray(),eye:viewer.camera.position.clone().sub(center).normalize().toArray()};
   });
   expect(Math.hypot(start.center[0],start.center[1])).toBeGreaterThan(0.02);
   let previous=start.eye, angle=0, drift=0;
@@ -298,11 +323,12 @@ test('平移后的模型围绕自身中心连续翻转', async ({page}) => {
     await page.mouse.down();
     for(let step=1;step<=22;step++) {
       await page.mouse.move(500,650-step*25);
-      const state=await page.evaluate(async()=>{
+      const state=await page.evaluate(async point=>{
         await new Promise(requestAnimationFrame);
         const viewer=(window as any).viewer;
-        return {center:viewer.origin.clone().set(0,0,0).project(viewer.camera).toArray(),eye:viewer.camera.position.clone().normalize().toArray()};
-      });
+        const center=viewer.origin.clone().fromArray(point);
+        return {center:center.clone().project(viewer.camera).toArray(),eye:viewer.camera.position.clone().sub(center).normalize().toArray()};
+      },start.point);
       const dot=previous.reduce((sum:number,value:number,i:number)=>sum+value*state.eye[i],0);
       angle+=Math.acos(Math.max(-1,Math.min(1,dot)));
       drift=Math.max(drift,Math.hypot(state.center[0]-start.center[0],state.center[1]-start.center[1]));
@@ -562,10 +588,11 @@ test('坐标平面与平移、窗口调整后的点击选面', async ({page}) =>
     const viewer=(window as any).viewer;
     return ['yz','xz','xy'].map(view=>{
       viewer.fit(view);
-      return viewer.camera.position.clone().normalize().toArray();
+      return viewer.camera.position.clone().sub(viewer.controls.target).normalize().toArray();
     });
   });
-  expect(planes).toEqual([[1,0,0],[0,-1,0],[0,0,1]]);
+  const expected=[[1,0,0],[0,-1,0],[0,0,1]];
+  planes.forEach((direction:number[],index:number)=>direction.forEach((value,axis)=>expect(value).toBeCloseTo(expected[index][axis],12)));
   await page.mouse.move(450,380);
   await page.mouse.down({button:'right'});
   await page.mouse.move(530,410,{steps:10});
@@ -656,7 +683,7 @@ test('实际模型的相近表面显示与高精度参考一致', async ({page})
     const results = [];
     for (const [view, scale] of [['xy',1],['iso',1],['xy',0.5]] as const) {
       viewer.fit(view);
-      camera.position.multiplyScalar(scale);
+      camera.position.sub(viewer.controls.target).multiplyScalar(scale).add(viewer.controls.target);
       viewer.controls.update();
       await new Promise(requestAnimationFrame);
       await new Promise(requestAnimationFrame);
@@ -666,7 +693,7 @@ test('实际模型的相近表面显示与高精度参考一致', async ({page})
         if (actual[i]>80 && actual[i]-actual[i+2]>30) selectedPixels++;
       }
       const near = camera.near, far = camera.far;
-      const distance = camera.position.length();
+      const distance = camera.position.distanceTo(viewer.controls.target);
       camera.near = distance/3; camera.far = distance*3;
       camera.updateProjectionMatrix();
       const reference = capture();

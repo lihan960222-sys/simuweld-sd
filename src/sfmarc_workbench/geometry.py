@@ -15,6 +15,29 @@ FACE_NODES = {
 }
 
 
+def body_volumes(points, triangles, triangle_bodies):
+    volumes = {}
+    for body in np.unique(triangle_bodies):
+        volumes[int(body)] = None
+        cells = triangles[triangle_bodies == body]
+        edges = np.concatenate((cells[:, [0, 1]], cells[:, [1, 2]], cells[:, [2, 0]]))
+        _, inverse, counts = np.unique(np.sort(edges, axis=1), axis=0, return_inverse=True, return_counts=True)
+        directions = np.zeros(len(counts), dtype=np.int64)
+        np.add.at(directions, inverse, np.where(edges[:, 0] < edges[:, 1], 1, -1))
+        if np.any(counts != 2) or np.any(directions != 0):
+            continue
+        # 平移到实体自身的节点，减少远离坐标原点时的数值误差。
+        local = points[cells] - points[cells[0, 0]]
+        cross = np.cross(local[:, 1] - local[:, 0], local[:, 2] - local[:, 0])
+        if np.any(np.linalg.norm(cross, axis=1) == 0):
+            continue
+        terms = np.einsum("ij,ij->i", local[:, 0], cross) / 6
+        volume = abs(float(np.sum(terms)))
+        if np.isfinite(volume) and volume > np.sum(np.abs(terms)) * np.finfo(float).eps * 64:
+            volumes[int(body)] = volume
+    return volumes
+
+
 def integrate_face(points):
     if len(points) == 3:
         vector = np.cross(points[1] - points[0], points[2] - points[0]) / 2
@@ -111,6 +134,7 @@ class SurfaceModel:
                 self.triangle_faces.append(i)
         self.triangles = np.array(self.triangles, dtype=np.uint32)
         self.triangle_faces = np.array(self.triangle_faces, dtype=np.uint32)
+        self.body_volumes = body_volumes(self.points, self.triangles, self.body_ids[self.triangle_faces])
 
     def select(self, seed: int, angle: float):
         if seed < 0 or seed >= len(self.faces) or not np.isfinite(angle) or not 0 <= angle <= 180:

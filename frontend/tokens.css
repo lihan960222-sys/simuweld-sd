@@ -1,0 +1,47 @@
+/* Hallmark · shape: app screen · theme: brand · genre: modern-minimal · v2.0.0 */
+:root {
+  --font-body: "Segoe UI", "Microsoft YaHei", sans-serif;
+  --color-ink: #243b43;
+  --color-muted: #526a73;
+  --color-paper: #fcfdfc;
+  --color-panel: #f5f7f6;
+  --color-field: #fcfefd;
+  --color-rule: #d3dedf;
+  --color-control-edge: #7b9097;
+  --color-accent: #147d88;
+  --color-accent-hover: #0c646d;
+  --color-accent-ink: #f8fdfc;
+  --color-accent-wash: #e5f0ef;
+  --color-focus: #106e79;
+  --color-chrome: #21373e;
+  --color-chrome-hover: #344e56;
+  --color-chrome-ink: #f6faf9;
+  --color-chrome-muted: #c1d1d3;
+  --color-disabled: #e6eceb;
+  --color-disabled-ink: #526a73;
+  --color-viewport: #edf2f6;
+  --color-overlay: #edf2f6ed;
+  --color-backdrop: #21373e80;
+  --color-warning: #795018;
+  --color-warning-paper: #fff6e7;
+  --color-warning-edge: #bf9b60;
+  --color-error: #a53a2b;
+  --color-x: #a42e3e;
+  --color-y: #166947;
+  --color-z: #2459a2;
+  --color-disc-label: #146581;
+  --color-shadow: #21373e1a;
+  --color-path-unselected: #9b9b9b;
+  --color-path-selected: #e59b26;
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 20px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --radius-control: 7px;
+  --radius-panel: 11px;
+  --dur-micro: 120ms;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+}

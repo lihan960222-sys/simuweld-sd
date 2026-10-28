@@ -1,0 +1,25 @@
+/* Hallmark · shape: app screen · theme: brand · redesign: full · 焊路操作 */
+[data-tool="welding"] #weld-add,[data-tool="welding"] #weld-cancel{width:34px;display:inline-flex;margin-right:var(--space-xs)}
+[data-tool="welding"] #weld-cancel[hidden]{display:none}
+.weld-editor-heading{font-weight:600;margin:var(--space-sm) 0 var(--space-xs)}
+.weld-entry-heading{display:flex;align-items:center;gap:var(--space-2xs)}
+.weld-entry-heading .row-buttons{display:flex;flex:none;margin:0;gap:var(--space-2xs)}
+.weld-entry-meta{display:flex;align-items:center;gap:var(--space-xs);padding-left:var(--space-xl)}
+.weld-entry-meta small{flex:1;min-width:0;line-height:1.5}
+.weld-entry-meta .weld-heat-choice{flex:1;min-width:0;margin:0}
+.weld-entry-meta select{min-height:30px;margin:0;font-size:12px}
+.weld-entry-name{flex:1;min-width:0;text-align:left;overflow-wrap:anywhere;padding:var(--space-xs) var(--space-2xs);border-color:transparent;background:transparent}
+.weld-entry-name[aria-pressed="true"]{color:var(--color-accent-hover);background:var(--color-accent-wash)}
+.weld-grip{cursor:grab;flex:none}
+.weld-grip:active{cursor:grabbing}
+.weld-card.dragging{opacity:.5}
+.weld-card.drag-over{outline:2px solid var(--color-accent)}
+.weld-preview-controls{margin-top:var(--space-sm)}
+.weld-legend{display:flex;flex-wrap:wrap;gap:var(--space-xs);align-items:center;font-size:11px;color:var(--color-muted);margin:var(--space-xs) 0}
+.weld-unselected::before,.weld-selected::before{content:"";display:inline-block;width:13px;height:3px;background:var(--color-path-unselected);vertical-align:middle;margin-right:var(--space-2xs)}
+.weld-selected::before{background:var(--color-path-selected)}
+.path-visibility{display:flex;align-items:flex-start;gap:var(--space-xs);margin:var(--space-sm) 0 0;color:var(--color-ink)}
+.path-visibility span{min-width:0;overflow-wrap:anywhere;white-space:pre-line;font-size:12px}
+.weld-player{margin-top:var(--space-md);padding-top:var(--space-sm);border-top:1px solid var(--color-rule)}
+.weld-player output#weld-rate-value{float:right;color:var(--color-accent-hover);font-variant-numeric:tabular-nums}
+.weld-rate-marks{display:flex;justify-content:space-between;color:var(--color-muted);font-size:11px;font-variant-numeric:tabular-nums}

@@ -13,8 +13,8 @@ export class Viewer {
   private renderer = new THREE.WebGLRenderer({antialias: true});
   private scene = new THREE.Scene();
   private pathScene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(40, 1, 0.001, 10000);
-  private pathCamera = new THREE.PerspectiveCamera();
+  private camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = new THREE.PerspectiveCamera(40, 1, 0.001, 10000);
+  private pathCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera = new THREE.PerspectiveCamera();
   private controls: TrackballControls;
   private orientation = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   private orientationRotation = new THREE.Quaternion(0,0,0,0);
@@ -37,7 +37,6 @@ export class Viewer {
   private weldLight = new THREE.PointLight(0xffa84c,0,0,0);
   private heatExtent = 0;
   private pathBounds = new THREE.Box3();
-  private pathFocus = new THREE.Box3();
   private pathPick: ((path: number, point: number)=>void) | null = null;
   private raycaster = new THREE.Raycaster();
   private origin = new THREE.Vector3();
@@ -50,7 +49,8 @@ export class Viewer {
   private meshes: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>[] = [];
   private selected = new Set<number>();
   private palette = [0x9cbbc8, 0xc2cdd5, 0x7897a8, 0xa8b2c7, 0x7faaaa, 0xb6bcb2, 0x89a6bf];
-  private edgesVisible = false;
+  private renderMode: 'solid' | 'wireframe' | 'solid-edges' = 'solid';
+  private explosion = 0;
 
   constructor(private host: HTMLElement, onPick: (face: number) => void) {
     this.scene.background = new THREE.Color(0xedf2f6);
@@ -90,6 +90,7 @@ export class Viewer {
     this.renderer.domElement.addEventListener('pointerleave',()=>this.clearPathHover());
     this.renderer.domElement.addEventListener('wheel',event=>{
       this.clearPathHover();
+      if(this.camera instanceof THREE.OrthographicCamera) return;
       const distance=this.camera.position.distanceTo(this.controls.target);
       if(this.camera.zoom===1 && (event.deltaY>=0 || distance>this.controls.minDistance*(1+1e-8))) return;
       event.preventDefault();event.stopImmediatePropagation();
@@ -101,7 +102,7 @@ export class Viewer {
     this.renderer.domElement.addEventListener('pointerup', event => {
       if (event.button !== 0 || Math.hypot(event.clientX-down[0], event.clientY-down[1]) > 4) return;
       const rect = this.renderer.domElement.getBoundingClientRect();
-      if (this.paths.visible && this.pathPick) {
+      if (this.pathScene.visible && this.pathPick) {
         const closest=this.pathPointAt(event.clientX,event.clientY);
         if (closest) this.pathPick(closest.path,closest.point);
         return;
@@ -113,7 +114,11 @@ export class Viewer {
     new ResizeObserver(() => {
       const width = this.host.clientWidth, height = this.host.clientHeight;
       this.renderer.setSize(width, height);
-      this.camera.aspect = width / height;
+      if(this.camera instanceof THREE.PerspectiveCamera) this.camera.aspect = width / height;
+      else {
+        const halfHeight=(this.camera.top-this.camera.bottom)/2;
+        this.camera.left=-halfHeight*width/height;this.camera.right=-this.camera.left;
+      }
       this.updateViewOffset();
       this.controls.handleResize();
     }).observe(this.host);
@@ -122,7 +127,7 @@ export class Viewer {
       const shift = this.panShift.subVectors(this.controls.target, this.pivot);
       if (shift.lengthSq() > 0) {
         // 将平移保存在视窗位置，使旋转中心保持在可见实体中心。
-        const scale = this.camera.zoom*this.host.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.position.distanceTo(this.controls.target));
+        const scale = this.host.clientHeight / this.visibleHeight();
         const right = new THREE.Vector3(1,0,0).applyQuaternion(this.camera.quaternion);
         const up = new THREE.Vector3(0,1,0).applyQuaternion(this.camera.quaternion);
         this.viewOffset.x += shift.dot(right) * scale;
@@ -134,7 +139,7 @@ export class Viewer {
       this.updateClipping();
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
-      if(this.paths.visible && !this.pathBounds.isEmpty()) {
+      if(this.pathScene.visible && !this.pathBounds.isEmpty()) {
         this.updatePathCamera();this.renderer.render(this.pathScene,this.pathCamera);
       }
       this.updateOrientation();
@@ -144,7 +149,7 @@ export class Viewer {
   private clearPathHover() { this.hoverPoint.visible=false;this.renderer.domElement.style.cursor=''; }
 
   private pathPointAt(clientX: number,clientY: number) {
-    if(!this.paths.visible || !this.pathPick || this.pathBounds.isEmpty()) return null;
+    if(!this.pathScene.visible || !this.paths.visible || !this.pathPick || this.pathBounds.isEmpty()) return null;
     this.updatePathCamera();
     const rect=this.renderer.domElement.getBoundingClientRect(),projected=new THREE.Vector3(),position=new THREE.Vector3();
     let closest: {path:number;point:number;distance:number;active:boolean;position:THREE.Vector3} | null=null;
@@ -162,6 +167,7 @@ export class Viewer {
   }
 
   private updatePathCamera() {
+    if(this.pathCamera.type!==this.camera.type) this.pathCamera=this.camera.clone();
     this.camera.updateMatrixWorld();this.pathCamera.copy(this.camera);
     const box=this.pathBounds.clone().union(this.trailBounds).applyMatrix4(this.camera.matrixWorldInverse),margin=Math.max(this.size*.05,1e-9);
     this.pathCamera.near=Math.max(1e-12,-box.max.z-margin);
@@ -208,6 +214,47 @@ export class Viewer {
   private updateViewOffset() {
     const width = this.host.clientWidth, height = this.host.clientHeight;
     this.camera.setViewOffset(width, height, this.viewOffset.x, this.viewOffset.y, width, height);
+  }
+
+  private visibleHeight() {
+    return this.camera instanceof THREE.PerspectiveCamera
+      ? 2*Math.tan(THREE.MathUtils.degToRad(this.camera.fov/2))*this.camera.position.distanceTo(this.controls.target)/this.camera.zoom
+      : (this.camera.top-this.camera.bottom)/this.camera.zoom;
+  }
+
+  setProjection(mode: 'perspective' | 'orthographic') {
+    if((this.camera instanceof THREE.PerspectiveCamera)===(mode==='perspective')) return;
+    const previous=this.camera,height=this.visibleHeight()*previous.zoom,aspect=this.host.clientWidth/this.host.clientHeight;
+    const camera=mode==='perspective' ? new THREE.PerspectiveCamera(40,aspect,previous.near,previous.far)
+      : new THREE.OrthographicCamera(-height*aspect/2,height*aspect/2,height/2,-height/2,previous.near,previous.far);
+    camera.position.copy(previous.position);camera.quaternion.copy(previous.quaternion);camera.up.copy(previous.up);camera.zoom=previous.zoom;
+    if(camera instanceof THREE.PerspectiveCamera) camera.position.sub(this.pivot).setLength(height/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2)))).add(this.pivot);
+    this.controls.dispose();this.camera=camera;this.controls=this.createControls();this.updateViewOffset();this.updateClipping();
+  }
+
+  setRenderMode(mode: 'solid' | 'wireframe' | 'solid-edges') {
+    this.renderMode=mode;
+    for(const mesh of this.meshes) {
+      mesh.material.visible=mode!=='wireframe';
+      for(const child of mesh.children) child.visible=child instanceof THREE.LineSegments ? mode!=='solid' : mode==='wireframe';
+    }
+  }
+
+  setExplosion(amount: number) {
+    if(!Number.isFinite(amount) || amount<0 || amount>1) throw new Error('爆炸图比例必须介于零和一之间。');
+    this.explosion=amount;
+    for(const mesh of this.meshes) mesh.position.copy(mesh.userData.explosionDirection).multiplyScalar(amount);
+    for(const arrow of this.arrows.children) {
+      arrow.position.copy(arrow.userData.basePosition);
+      const mesh=this.meshes.find(mesh=>mesh.userData.body===arrow.userData.body);
+      if(mesh) arrow.position.add(mesh.position);
+    }
+    this.models.updateMatrixWorld(true);this.updateBounds();this.updateClipping();
+  }
+
+  clearModel() {
+    this.clearGroup(this.models);this.clearArrows();this.meshes=[];this.selected.clear();this.explosion=0;
+    this.bounds.makeEmpty();this.hideWeldPreview();this.clearWeldTrails();this.clearPathHover();
   }
 
   load(data: MeshData) {
@@ -265,12 +312,26 @@ export class Viewer {
       const edgeGeometry = new THREE.BufferGeometry();
       edgeGeometry.setAttribute('position',new THREE.BufferAttribute(edgePositions,3));
       const edges = new THREE.LineSegments(edgeGeometry, new THREE.LineBasicMaterial({color: 0x24394b, transparent: true, opacity: 0.35}));
-      edges.visible = this.edgesVisible;
+      edges.visible = this.renderMode!=='solid';
+      mesh.material.visible=this.renderMode!=='wireframe';
       mesh.add(edges);
+      const selectionGeometry=new THREE.BufferGeometry();
+      selectionGeometry.setAttribute('position',geometry.getAttribute('position'));selectionGeometry.setIndex([]);
+      const selection=new THREE.Mesh(selectionGeometry,new THREE.MeshBasicMaterial({color:0xffbc58,side:THREE.DoubleSide,transparent:true,opacity:.65,depthWrite:false}));
+      selection.visible=this.renderMode==='wireframe';mesh.add(selection);
       this.models.add(mesh);
       this.meshes.push(mesh);
     }
-    this.fit();
+    const visibleBounds=new THREE.Box3();
+    for(const mesh of this.meshes) if(mesh.visible) visibleBounds.union(mesh.geometry.boundingBox!);
+    const center=visibleBounds.getCenter(new THREE.Vector3()),distance=visibleBounds.getSize(new THREE.Vector3()).length()*.6;
+    for(const mesh of this.meshes) {
+      const direction=mesh.geometry.boundingBox!.getCenter(new THREE.Vector3()).sub(center);
+      const body=mesh.userData.body;
+      if(direction.lengthSq()<1e-20) direction.set(Math.cos(body*2.399963),Math.sin(body*2.399963),0.5);
+      mesh.userData.explosionDirection=direction.normalize().multiplyScalar(distance);
+    }
+    this.setExplosion(this.explosion);this.fit();
   }
 
   fit(view = 'iso') {
@@ -293,7 +354,7 @@ export class Viewer {
   }
 
   private frame(direction: THREE.Vector3,pathsOnly=false) {
-    if(pathsOnly) this.bounds.copy(this.pathFocus.isEmpty()?this.pathBounds:this.pathFocus);else this.updateBounds();
+    if(pathsOnly) this.bounds.copy(this.pathBounds);else this.updateBounds();
     if (this.bounds.isEmpty()) return;
     this.bounds.getCenter(this.pivot);
     this.size = Math.max(this.bounds.getSize(new THREE.Vector3()).length(),1e-9);
@@ -301,6 +362,11 @@ export class Viewer {
     this.viewOffset.set(0,0);
     this.camera.clearViewOffset();
     this.camera.position.copy(direction).multiplyScalar(this.size * 1.65).add(this.pivot);
+    if(this.camera instanceof THREE.OrthographicCamera) {
+      const height=2*Math.tan(THREE.MathUtils.degToRad(20))*this.size*1.65,aspect=this.host.clientWidth/this.host.clientHeight;
+      this.camera.top=height/2;this.camera.bottom=-height/2;this.camera.left=-height*aspect/2;this.camera.right=height*aspect/2;
+      this.camera.updateProjectionMatrix();
+    }
     this.camera.lookAt(this.pivot);
     this.controls = this.createControls();
     this.updateClipping();
@@ -308,15 +374,15 @@ export class Viewer {
 
   private updateBounds() {
     this.bounds.makeEmpty();
-    for (const mesh of this.meshes) if (mesh.visible) this.bounds.union(mesh.geometry.boundingBox!);
-    if (this.paths.visible && this.bounds.isEmpty()) this.bounds.copy(this.pathBounds);
+    for (const mesh of this.meshes) if (mesh.visible) this.bounds.union(mesh.geometry.boundingBox!.clone().translate(mesh.position));
+    if (this.bounds.isEmpty() && this.pathScene.visible) this.bounds.copy(this.pathBounds);
   }
 
   private updateClipping() {
     if (this.bounds.isEmpty()) return;
     this.camera.updateMatrixWorld();
     this.viewBounds.copy(this.bounds);
-    for (const mesh of this.meshes) if (mesh.visible) this.viewBounds.union(mesh.geometry.boundingBox!);
+    for (const mesh of this.meshes) if (mesh.visible) this.viewBounds.union(mesh.geometry.boundingBox!.clone().translate(mesh.position));
     if (this.torch.visible) {
       const radius=new THREE.Vector3().setScalar(this.heatExtent);
       this.viewBounds.union(new THREE.Box3(this.torch.position.clone().sub(radius),this.torch.position.clone().add(radius)));
@@ -343,11 +409,16 @@ export class Viewer {
         for (let k=0; k<3; k++) colors.setXYZ(triangle*3+k, color.r, color.g, color.b);
       });
       colors.needsUpdate = true;
+      const indices: number[]=[];
+      (mesh.userData.faceIds as number[]).forEach((face,triangle)=>{if(this.selected.has(face)) indices.push(triangle*3,triangle*3+1,triangle*3+2);});
+      (mesh.children[1] as THREE.Mesh).geometry.setIndex(indices);
     }
   }
 
   showBody(body: number, visible: boolean) {
     this.meshes.filter(mesh=>mesh.userData.body===body).forEach(mesh=>mesh.visible=visible);
+    this.arrows.children.filter(arrow=>arrow.userData.body===body).forEach(arrow=>arrow.visible=visible);
+    this.updateBounds();
     this.updateClipping();
   }
   bodyColor(body: number) { return '#'+this.meshes.find(mesh=>mesh.userData.body===body)!.userData.base.getHexString(); }
@@ -363,10 +434,9 @@ export class Viewer {
     material.needsUpdate = true;
   }
   showEdges(visible: boolean) {
-    this.edgesVisible = visible;
-    this.meshes.forEach(mesh=>mesh.children.forEach(child=>child.visible=visible));
+    this.setRenderMode(visible?'solid-edges':'solid');
   }
-  showArrows(centers: number[][], directions: number[][], area: number) {
+  showArrows(centers: number[][], directions: number[][], area: number, faces?: number[]) {
     this.clearArrows();
     if (!centers.length) return;
     const length = this.arrowLength = 0.6 * Math.sqrt(area / centers.length);
@@ -374,6 +444,9 @@ export class Viewer {
       const direction = new THREE.Vector3().fromArray(directions[i]);
       const point = new THREE.Vector3().fromArray(center).sub(this.origin);
       const arrow = new THREE.ArrowHelper(direction, point.clone().addScaledVector(direction, -length), length, 0x078b94, length*0.25, length*0.12);
+      const mesh=faces ? this.meshes.find(mesh=>(mesh.userData.faceIds as number[]).includes(faces[i])) : undefined;
+      arrow.userData={basePosition:arrow.position.clone(),body:mesh?.userData.body};
+      if(mesh) {arrow.position.add(mesh.position);arrow.visible=mesh.visible;}
       this.arrows.add(arrow);
     });
   }
@@ -453,16 +526,16 @@ export class Viewer {
   clearWeldTrails() {
     this.clearGroup(this.weldTrails);this.trailMeshes=[];this.trailLines=[];this.trailPoints=[];this.trailSides=[];this.trailBounds.makeEmpty();this.partialWeldTrail=null;this.partialWeldLine=null;
   }
-  private trailMaterial() { return new THREE.MeshBasicMaterial({color:0xe86b40,side:THREE.DoubleSide,transparent:true,opacity:.85,depthTest:false,depthWrite:false}); }
+  private trailMaterial() { return new THREE.MeshBasicMaterial({color:0xe4473f,side:THREE.DoubleSide,transparent:true,opacity:.85,depthTest:false,depthWrite:false}); }
   // 正常缩放时，中心线保留完成颜色，实体带仍使用热源的物理宽度。
-  private trailLineMaterial() { return new THREE.LineBasicMaterial({color:0xe86b40,transparent:true,depthTest:false,depthWrite:false}); }
+  private trailLineMaterial() { return new THREE.LineBasicMaterial({color:0xe4473f,transparent:true,depthTest:false,depthWrite:false}); }
   private writeTrailSegment(positions: Float32Array,offset: number,start: THREE.Vector3,end: THREE.Vector3,side: THREE.Vector3) {
     const first=start.clone().add(side),second=start.clone().sub(side),third=end.clone().add(side),fourth=end.clone().sub(side);
     [first,second,third,third,second,fourth].forEach((point,index)=>point.toArray(positions,offset+index*3));
   }
   setPaths(data: PathData[], selected: number, range: [number,number], onPick: (path: number, point: number)=>void) {
     this.clearPathHover();
-    this.clearGroup(this.paths); this.pathBounds.makeEmpty(); this.pathFocus.makeEmpty(); this.pathPick=onPick;
+    this.clearGroup(this.paths); this.pathBounds.makeEmpty(); this.pathPick=onPick;
     if (!this.meshes.length) {
       const box=new THREE.Box3();
       for (const path of data) for (const xyz of path.points) box.expandByPoint(new THREE.Vector3().fromArray(xyz));
@@ -475,7 +548,6 @@ export class Viewer {
       path.points.forEach((xyz,index)=>{
         const point=new THREE.Vector3().fromArray(xyz).sub(this.origin);
         point.toArray(coordinates,index*3); this.pathBounds.expandByPoint(point);
-        if (active && index>=low && index<=high) this.pathFocus.expandByPoint(point);
         const color=new THREE.Color(active && index>=low && index<=high?0xe59b26:0x9b9b9b);
         color.toArray(colors,index*3);
       });
@@ -490,12 +562,16 @@ export class Viewer {
     }
   }
   showPaths(visible: boolean) {
+    this.pathScene.visible=visible;
+    if(!visible) this.clearPathHover();
+  }
+  showPathSelection(visible: boolean) {
     this.paths.visible=visible;
     if(!visible) this.clearPathHover();
   }
   fitPaths() {
     if(this.pathBounds.isEmpty()) return;
-    this.paths.visible=true;this.camera.zoom=1;this.camera.updateProjectionMatrix();
+    this.pathScene.visible=true;this.camera.zoom=1;this.camera.updateProjectionMatrix();
     this.frame(this.camera.position.clone().sub(this.controls.target).normalize(),true);
   }
   private clearGroup(group: THREE.Group) {

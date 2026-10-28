@@ -1,0 +1,24 @@
+[
+  {
+    "shape": "app screen",
+    "theme": "brand",
+    "genre": "modern-minimal",
+    "nav": "工作模块标签",
+    "footer": "copyright LH",
+    "imagery": "真实模型视窗",
+    "signature": "原始网格三维视窗",
+    "sections": ["模型与实体", "三维视窗", "功能参数"],
+    "prompt": "使用 Hallmark 美化 SIMUWELD SD，生成独立版本及截图对比",
+    "waived": [],
+    "verification": {
+      "floor_failures": 0,
+      "reflex_findings": 0,
+      "retained_fields": "45/45",
+      "retained_headings": "14/14",
+      "finish_review": "独立审查，手机宽度的功能面板顺序已调整并通过截图核对",
+      "viewer_tests": 23,
+      "browser_tests": 11,
+      "windows_tests": 4
+    }
+  }
+]

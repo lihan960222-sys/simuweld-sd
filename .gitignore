@@ -16,3 +16,7 @@ pytest-cache-files-*/
 *.sts
 test-results/
 playwright-report/
+.hallmark/before/
+.hallmark/after/
+.hallmark/renders/
+.hallmark/shots/

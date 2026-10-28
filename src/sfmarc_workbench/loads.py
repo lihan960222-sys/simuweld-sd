@@ -63,7 +63,7 @@ def preview(model: SurfaceModel, spec: LoadSpec):
     samples = faces[np.linspace(0, len(faces) - 1, min(36, len(faces)), dtype=int)]
     directions = np.tile(direction, (len(samples), 1)) if spec.mode == "manual" else model.normals[samples] * (-1 if spec.mode == "inward" else 1)
     return {"area": area, "face_count": len(faces), "force": force.tolist(), "pressure": pressure,
-            "centers": model.centers[samples].tolist(), "directions": directions.tolist(),
+            "centers": model.centers[samples].tolist(), "directions": directions.tolist(), "face_ids": samples.tolist(),
             "area_unit": spec.length_unit + "²", "force_unit": spec.force_unit}
 
 
