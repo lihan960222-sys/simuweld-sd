@@ -16,5 +16,7 @@ test('非线性速度拖条控制实际播放速度',async({page})=>{
   expect(slow).toBeGreaterThan(0.02);expect(slow).toBeLessThan(0.1);
   expect(normal/slow).toBeGreaterThan(5);expect(normal/slow).toBeLessThan(15);
   await page.locator('#weld-rate').fill('50');
-  await expect(page.locator('#weld-rate')).toHaveAttribute('aria-valuetext','20×');
+  await expect(page.locator('#weld-rate')).toHaveAttribute('aria-valuetext','2×');
+  const fastStart=await elapsed();await page.waitForTimeout(500);const fast=(await elapsed())-fastStart;
+  expect(fast/normal).toBeGreaterThan(1.5);expect(fast/normal).toBeLessThan(2.5);
 });

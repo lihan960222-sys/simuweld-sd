@@ -62,7 +62,7 @@ export class WeldingTool {
         <button id="weld-add" class="primary full" disabled>添加到顺序列表</button><button id="weld-cancel" class="full" hidden>取消编辑</button>
         <div id="weld-list"></div>
         <div class="weld-player"><div class="row-buttons weld-preview-controls"><button id="weld-all" disabled>按顺序播放全部焊路</button><button id="weld-play" disabled>播放</button><button id="weld-reset" disabled>回到起点</button></div>
-        <label>播放速度 <output id="weld-rate-value">1×</output><input id="weld-rate" type="range" min="-50" max="50" step="1" value="0" aria-label="播放速度" aria-valuetext="1×"><span class="weld-rate-marks" aria-hidden="true"><span>0.1×</span><span>1×</span><span>20×</span></span></label>
+        <label>播放速度 <output id="weld-rate-value">1×</output><input id="weld-rate" type="range" min="-50" max="50" step="1" value="0" aria-label="播放速度" aria-valuetext="1×"><span class="weld-rate-marks" aria-hidden="true"><span>0.1×</span><span>1×</span><span>2×</span></span></label>
         <label>进度<input id="weld-progress" type="range" min="0" max="1" step="any" value="0" disabled></label>
         <output id="weld-time" title="按速度与停止时间播放。光源表示焊接位置，温度场需在 Simufact 中计算。">添加焊路后预览</output></div>
       </section>
@@ -84,7 +84,7 @@ export class WeldingTool {
     for(const [id,icon,label] of [
       ['weld-pick-start','start','拾取起点'],['weld-pick-end','end','拾取终点'],['weld-full','path','整条路径'],
       ['weld-reverse','reverse','反向'],['weld-add','add','添加焊路'],['weld-cancel','close','取消编辑'],
-      ['weld-all','all','按顺序播放全部焊路'],['weld-play','play','播放'],['weld-reset','reset','回到起点'],
+      ['weld-all','playAll','按顺序播放全部焊路'],['weld-play','play','播放'],['weld-reset','reset','回到起点'],
       ['weld-heat-save','save','创建热源'],['weld-heat-new','add','新增热源'],['weld-heat-cancel','close','取消修改'],
     ] as const) setIcon(this.element(id),icon,label);
     this.panel.addEventListener('input',event=>{
@@ -171,7 +171,7 @@ export class WeldingTool {
   private select(id: string) { return this.element<HTMLSelectElement>(id); }
   private playbackRate() {
     const position=Number(this.field('weld-rate').value);
-    return Number((position<0?10**(position/50):20**(position/50)).toFixed(2));
+    return Number((position<0?10**(position/50):2**(position/50)).toFixed(2));
   }
   get hasPaths() { return !!this.sources.length; }
   get canExport() { return !!this.entries.length && this.editing===null && !this.heatDirty; }

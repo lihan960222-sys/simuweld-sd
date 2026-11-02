@@ -1,5 +1,5 @@
 /* Hallmark · shape: app screen · theme: brand · redesign: full · 焊路操作 */
-[data-tool="welding"] #weld-add,[data-tool="welding"] #weld-cancel{width:34px;display:inline-flex;margin-right:var(--space-xs)}
+[data-tool="welding"] #weld-add,[data-tool="welding"] #weld-cancel{margin-right:var(--space-xs)}
 [data-tool="welding"] #weld-cancel[hidden]{display:none}
 .weld-editor-heading{font-weight:600;margin:var(--space-sm) 0 var(--space-xs)}
 .weld-entry-heading{display:flex;align-items:center;gap:var(--space-2xs)}

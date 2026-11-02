@@ -1,0 +1,128 @@
+/* 工作区界面 */
+body { background: var(--color-panel); }
+header {
+  height: 60px;
+  gap: var(--space-xl);
+  padding: 0 var(--space-lg);
+  border-bottom: 1px solid var(--color-rule);
+  background: var(--color-chrome);
+  color: var(--color-chrome-ink);
+}
+header :focus-visible { outline-color: var(--color-focus); }
+.brand { gap: var(--space-xs); font-size: 15px; }
+.brand strong { font-weight: 650; letter-spacing: 0; }
+.brand-icon { width: 32px; height: 32px; border-radius: var(--radius-control); }
+#tools {
+  gap: var(--space-2xs);
+  padding: var(--space-2xs);
+  background: var(--color-panel);
+  border: 1px solid var(--color-rule);
+  border-radius: 10px;
+}
+#tools button {
+  min-height: 32px;
+  padding: var(--space-2xs) var(--space-sm);
+  border: 1px solid transparent;
+  color: var(--color-muted);
+  font-weight: 500;
+}
+#tools button:hover { background: var(--color-chrome-hover); color: var(--color-ink); }
+#tools button[aria-pressed=true] {
+  background: var(--color-elevated);
+  border-color: var(--color-rule);
+  color: var(--color-ink);
+  box-shadow: 0 1px 3px var(--color-shadow);
+}
+main { height: calc(100dvh - 88px); }
+aside { background: var(--color-paper); }
+.left > section:first-child { background: var(--color-paper); }
+.sidebar-resizer { background: var(--color-panel); }
+.sidebar-resizer:hover, .sidebar-resizer:focus-visible { background: var(--color-accent-wash); }
+button, input, select { border-color: var(--color-control-edge); }
+button { font-weight: 550; }
+button:hover { border-color: var(--color-muted); }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+button.icon-button, button.icon-button.full, .row-buttons button.icon-button, .view-tools button.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  line-height: 1;
+  vertical-align: middle;
+}
+button.icon-button svg { display: block; width: 19px; height: 19px; margin: 0; }
+#model-info-button, .view-tools #explode { width: 36px; height: 36px; min-height: 36px; padding: 0; }
+header > button.icon-button { min-height: 36px; }
+.primary, .primary:hover { color: var(--color-accent-ink); }
+.primary:hover { border-color: var(--color-accent-hover); }
+.primary:disabled { color: var(--color-disabled-ink); }
+.panel-group > summary { padding: var(--space-md) var(--space-lg); }
+.panel-group > summary h2 { font-size: 13px; font-weight: 650; }
+.panel-content { padding: 0 var(--space-lg) var(--space-lg); }
+.section-title { gap: var(--space-xs); }
+.badge { background: var(--color-panel); border-color: transparent; border-radius: 999px; padding: 0 var(--space-xs); }
+label { color: var(--color-muted); font-size: 12px; font-weight: 500; }
+input:not([type=checkbox]):not([type=file]):not([type=range]):not([type=color]), select {
+  min-height: 38px;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--color-elevated);
+  border-color: var(--color-rule);
+  border-radius: var(--radius-control);
+}
+input:not([type=checkbox]):not([type=file]):not([type=range]):not([type=color]):hover, select:hover { border-color: var(--color-control-edge); }
+input[type=checkbox] { accent-color: var(--color-accent); }
+input[type=range] { appearance: none; height: 20px; padding: 0; border: 0; background: transparent; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: var(--color-range-track); }
+input[type=range]::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border: 2px solid var(--color-elevated);
+  border-radius: 50%;
+  background: var(--color-range-thumb);
+  box-shadow: 0 1px 4px var(--color-shadow);
+}
+input[type=range]:disabled::-webkit-slider-thumb { background: var(--color-disabled-ink); }
+.file-button { background: var(--color-elevated); border-color: var(--color-rule); color: var(--color-ink); }
+.file-button:hover { background: var(--color-panel); border-color: var(--color-control-edge); }
+.body-tree > summary { background: var(--color-panel); border-radius: var(--radius-control); }
+.body-card { border-bottom-color: transparent; }
+.body-card > summary { border-radius: var(--radius-control); }
+.body-card > summary:hover { background: var(--color-panel); }
+.info-wrap .model-info { background: var(--color-elevated); border-color: var(--color-rule); box-shadow: 0 8px 24px var(--color-shadow); }
+.view-tools { gap: var(--space-xs); }
+.view-tools button, .view-tools select, .view-tools label {
+  background: var(--color-elevated);
+  border-color: var(--color-rule);
+  box-shadow: 0 2px 8px var(--color-shadow);
+}
+.view-tools button:hover { background: var(--color-panel); }
+.view-tools button:not(.icon-button) { border-radius: 10px; }
+.view-tools select { min-height: 36px; }
+.selection-bar { background: var(--color-elevated); border-color: var(--color-rule); box-shadow: 0 8px 24px var(--color-shadow); }
+.force-info, #case-list { background: var(--color-panel); border: 1px solid var(--color-rule); }
+.load-card { border-bottom-color: var(--color-rule); }
+.load-select[aria-pressed=true], .weld-entry-name[aria-pressed=true] { color: var(--color-ink); background: var(--color-accent-wash); }
+.weld-player { border-top-color: var(--color-rule); }
+.heat-preview { border-color: var(--color-rule); background: var(--color-panel); }
+.model-dialog { border-color: var(--color-rule); border-radius: 16px; box-shadow: 0 18px 50px var(--color-shadow); }
+footer { background: var(--color-paper); }
+@media (max-width: 1100px) {
+  header { gap: var(--space-sm); padding: 0 var(--space-md); }
+}
+@media (max-width: 800px) {
+  header { height: auto; padding: var(--space-sm) var(--space-md); }
+  #tools { order: 1; width: 100%; }
+  main, main.has-tool-panel { height: auto; }
+  .panel-group > summary { padding-inline: var(--space-md); }
+  .panel-content { padding-inline: var(--space-md); }
+}
+@media (max-width: 520px) {
+  header > button.icon-button { width: 36px; margin-left: auto; }
+}

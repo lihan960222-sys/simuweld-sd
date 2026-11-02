@@ -4,6 +4,7 @@ import { Viewer, type MeshData } from './viewer';
 import { WeldingTool } from './welding';
 import { setupSidebarResize } from './sidebarResize';
 import { iconButton, setIcon, makeCollapsible } from './ui';
+import './design.css';
 
 interface ModelInfo {
   supports_loads: boolean; length_unit?: string;
@@ -142,6 +143,7 @@ makeCollapsible();
 setIcon(get('open-model'),'upload','打开模型');setIcon(get('model-info-button'),'info','模型信息');
 setIcon(get('save-load'),'save','保存载荷');setIcon(get('clear'),'close','清空选择');
 setIcon(get('show-all-loads'),'all','显示全部载荷');setIcon(get('explode'),'explode','爆炸图');
+setIcon(get('fit'),'focus','回到中心');
 const workspaceTools: WorkspaceTool[] = [
   {id:'model', label:'模型查看'},
   {id:'surface-load', label:'面载荷', activate:()=>{if(displayedLoads.size) drawSavedLoads();else {viewer.highlight(selected); drawPreview();}}, pick:face=>{

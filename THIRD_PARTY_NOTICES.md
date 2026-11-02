@@ -1,6 +1,6 @@
 # 第三方组件
 
-程序使用 meshioplusplus、NumPy、SciPy、fortranformat、FastAPI、Starlette、Uvicorn、Pydantic、python-multipart、Three.js 及它们的依赖。安装版本由依赖文件记录。
+程序使用 meshioplusplus、NumPy、SciPy、fortranformat、FastAPI、Starlette、Uvicorn、Pydantic、python-multipart、Three.js、Lucide 及它们的依赖。安装版本由依赖文件记录。
 
 meshioplusplus Python 源码采用 MIT。其发布的二进制包含 OpenCASCADE，许可为 `MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0)`。Windows 程序附带组件的原始许可与说明，位于 `_internal/licenses/`。保留这些文件；组件原始说明包含源码构建信息。
 

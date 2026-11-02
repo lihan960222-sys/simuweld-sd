@@ -11,7 +11,7 @@ test('焊路循环、停止时间、顺序播放与拖动排序',async({page})=>
   expect(await page.locator('#weld-add').evaluate(element=>!!(element.compareDocumentPosition(document.getElementById('weld-list')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   await page.locator('#weld-rate').fill('-50');await expect(page.locator('#weld-rate-value')).toHaveText('0.1×');
   await page.locator('#weld-rate').fill('-25');await expect(page.locator('#weld-rate-value')).toHaveText('0.32×');
-  await page.locator('#weld-rate').fill('50');await expect(page.locator('#weld-rate-value')).toHaveText('20×');
+  await page.locator('#weld-rate').fill('50');await expect(page.locator('#weld-rate-value')).toHaveText('2×');
   await page.locator('#weld-rate').fill('0');await expect(page.locator('#weld-rate-value')).toHaveText('1×');
   await expect(page.locator('#weld-rate')).toHaveAttribute('aria-valuetext','1×');
   await page.locator('#weld-files').setInputFiles('work/weld-reference/nodes.csv');

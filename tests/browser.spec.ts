@@ -326,7 +326,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(page.locator('#empty h1')).toHaveText('打开模型');
   await expect(page.locator('.eyebrow, .help, .local, #unit-confirm, #solver-info, #material-info')).toHaveCount(0);
   await expect(page.locator('footer')).toHaveText('copyright LH');
-  await expect(page.locator('.left details.panel-group')).toHaveCount(1);
+  await expect(page.locator('.left > section:not([hidden]) details.panel-group')).toHaveCount(1);
   const viewButtons=page.locator('.view-tools button:not(#explode)');
   await expect(viewButtons).toHaveCount(4);
   for(const button of await viewButtons.all()) {

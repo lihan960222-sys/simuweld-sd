@@ -5,6 +5,7 @@ from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 datas = [("dist", "web"), ("README.md", "."), ("THIRD_PARTY_NOTICES.md", "."), ("LICENSE", ".")]
 datas.append(("node_modules/three/LICENSE", "licenses/three"))
+datas.append(("node_modules/lucide/LICENSE", "licenses/lucide"))
 datas += collect_data_files("meshioplusplus")
 datas += copy_metadata("fortranformat")
 for distribution in distributions():
