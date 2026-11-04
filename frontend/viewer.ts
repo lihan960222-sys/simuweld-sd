@@ -6,6 +6,7 @@ export interface MeshData {
   points: number[]; triangles: number[]; triangle_faces: number[]; body_ids: number[];
   edges: number[]; edge_bodies: number[];
 }
+export type RenderMode = 'solid' | 'wireframe' | 'edges' | 'solid-edges';
 export interface PathData { id: number; points: number[][]; }
 export interface WeldTrailPath { points: number[][]; radius: number; direction: number[]; }
 
@@ -21,7 +22,15 @@ export class Viewer {
   private viewOffset = new THREE.Vector2();
   private models = new THREE.Group();
   private arrows = new THREE.Group();
+  private arrowFadeStart: number | null = null;
   private paths = new THREE.Group();
+  private conversion = new THREE.Group();
+  private conversionPaths = new THREE.Group();
+  private conversionNodes = new THREE.Group();
+  private conversionMissing = new THREE.Group();
+  private conversionNodeSize = 6;
+  private conversionTooltip = document.createElement('div');
+  private conversionBounds = new THREE.Box3();
   private weldTrails = new THREE.Group();
   private trailMeshes: THREE.Mesh<THREE.BufferGeometry,THREE.MeshBasicMaterial>[]=[];
   private trailLines: THREE.Line<THREE.BufferGeometry,THREE.LineBasicMaterial>[]=[];
@@ -49,7 +58,7 @@ export class Viewer {
   private meshes: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>[] = [];
   private selected = new Set<number>();
   private palette = [0x9cbbc8, 0xc2cdd5, 0x7897a8, 0xa8b2c7, 0x7faaaa, 0xb6bcb2, 0x89a6bf];
-  private renderMode: 'solid' | 'wireframe' | 'solid-edges' = 'solid';
+  private renderMode: RenderMode = 'solid';
   private explosion = 0;
 
   constructor(private host: HTMLElement, onPick: (face: number) => void) {
@@ -73,6 +82,10 @@ export class Viewer {
     light.position.set(3, -4, 5);
     this.scene.add(light, this.models, this.arrows, this.torch);
     this.pathScene.add(this.weldTrails,this.paths,this.hoverPoint);
+    this.conversion.add(this.conversionPaths,this.conversionNodes,this.conversionMissing);
+    this.conversion.visible=false;this.pathScene.add(this.conversion);
+    this.conversionTooltip.className='tc-node-tooltip';this.conversionTooltip.hidden=true;
+    this.conversionTooltip.setAttribute('role','status');this.host.append(this.conversionTooltip);
     const glow=document.createElement('canvas');glow.width=64;glow.height=64;
     const context=glow.getContext('2d')!,gradient=context.createRadialGradient(32,32,2,32,32,32);
     gradient.addColorStop(0,'#ffffff');gradient.addColorStop(.25,'#ffffff');gradient.addColorStop(1,'#ffffff00');
@@ -83,6 +96,7 @@ export class Viewer {
     this.renderer.domElement.addEventListener('pointerdown', event => { down = [event.clientX, event.clientY];this.clearPathHover(); });
     this.renderer.domElement.addEventListener('pointermove',event=>{
       if(event.buttons) {this.clearPathHover();return;}
+      if(this.conversion.visible) {this.inspectConversion(event.clientX,event.clientY);return;}
       const hit=this.pathPointAt(event.clientX,event.clientY);
       this.hoverPoint.visible=!!hit;this.renderer.domElement.style.cursor=hit?'pointer':'';
       if(hit) {this.hoverPoint.position.copy(hit.position);this.hoverPoint.userData={path:hit.path,point:hit.point};}
@@ -101,6 +115,7 @@ export class Viewer {
     },{capture:true,passive:false});
     this.renderer.domElement.addEventListener('pointerup', event => {
       if (event.button !== 0 || Math.hypot(event.clientX-down[0], event.clientY-down[1]) > 4) return;
+      if(this.conversion.visible) {this.inspectConversion(event.clientX,event.clientY);return;}
       const rect = this.renderer.domElement.getBoundingClientRect();
       if (this.pathScene.visible && this.pathPick) {
         const closest=this.pathPointAt(event.clientX,event.clientY);
@@ -123,6 +138,7 @@ export class Viewer {
       this.controls.handleResize();
     }).observe(this.host);
     this.renderer.setAnimationLoop(() => {
+      this.updateArrowFade();
       this.controls.update();
       const shift = this.panShift.subVectors(this.controls.target, this.pivot);
       if (shift.lengthSq() > 0) {
@@ -139,14 +155,36 @@ export class Viewer {
       this.updateClipping();
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
-      if(this.pathScene.visible && !this.pathBounds.isEmpty()) {
+      if(this.pathScene.visible && (!this.pathBounds.isEmpty() || (this.conversion.visible && !this.conversionBounds.isEmpty()))) {
         this.updatePathCamera();this.renderer.render(this.pathScene,this.pathCamera);
       }
       this.updateOrientation();
     });
   }
 
-  private clearPathHover() { this.hoverPoint.visible=false;this.renderer.domElement.style.cursor=''; }
+  private clearPathHover() { this.hoverPoint.visible=false;this.renderer.domElement.style.cursor='';this.conversionTooltip.hidden=true; }
+
+  private inspectConversion(clientX:number,clientY:number) {
+    this.clearPathHover();if(!this.conversionNodes.visible)return;
+    this.updatePathCamera();
+    const rect=this.renderer.domElement.getBoundingClientRect(),projected=new THREE.Vector3();
+    let closest:{label:string;distance:number}|null=null;
+    for(const group of [this.conversionNodes,this.conversionMissing])for(const object of group.children)if(object instanceof THREE.Points){
+      const positions=object.geometry.getAttribute('position');
+      for(let index=0;index<positions.count;index++) {
+        projected.fromBufferAttribute(positions,index).project(this.pathCamera);if(Math.abs(projected.z)>1)continue;
+        const distance=Math.hypot((projected.x+1)*rect.width/2-(clientX-rect.left),(1-projected.y)*rect.height/2-(clientY-rect.top));
+        if(distance<=Math.max(8,this.conversionNodeSize) && (!closest || distance<closest.distance)) {
+          const item=object.userData.items[index];
+          closest={distance,label:item.node_id!=null?`${item.component} · 节点 ${item.node_id}`:`${item.component} · 焊路 ${item.path_id} · 未匹配目标`};
+        }
+      }
+    }
+    if(closest) {
+      this.conversionTooltip.textContent=closest.label;this.conversionTooltip.hidden=false;
+      this.renderer.domElement.style.cursor='help';
+    }
+  }
 
   private pathPointAt(clientX: number,clientY: number) {
     if(!this.pathScene.visible || !this.paths.visible || !this.pathPick || this.pathBounds.isEmpty()) return null;
@@ -169,7 +207,10 @@ export class Viewer {
   private updatePathCamera() {
     if(this.pathCamera.type!==this.camera.type) this.pathCamera=this.camera.clone();
     this.camera.updateMatrixWorld();this.pathCamera.copy(this.camera);
-    const box=this.pathBounds.clone().union(this.trailBounds).applyMatrix4(this.camera.matrixWorldInverse),margin=Math.max(this.size*.05,1e-9);
+    const box=this.pathBounds.clone().union(this.trailBounds);
+    if(this.conversion.visible) box.union(this.conversionBounds);
+    box.applyMatrix4(this.camera.matrixWorldInverse);
+    const margin=Math.max(this.size*.05,1e-9);
     this.pathCamera.near=Math.max(1e-12,-box.max.z-margin);
     this.pathCamera.far=Math.max(this.pathCamera.near*2,-box.min.z+margin);
     this.pathCamera.updateProjectionMatrix();
@@ -232,11 +273,14 @@ export class Viewer {
     this.controls.dispose();this.camera=camera;this.controls=this.createControls();this.updateViewOffset();this.updateClipping();
   }
 
-  setRenderMode(mode: 'solid' | 'wireframe' | 'solid-edges') {
+  setRenderMode(mode: RenderMode) {
     this.renderMode=mode;
     for(const mesh of this.meshes) {
-      mesh.material.visible=mode!=='wireframe';
-      for(const child of mesh.children) child.visible=child instanceof THREE.LineSegments ? mode!=='solid' : mode==='wireframe';
+      mesh.material.visible=mode!=='edges';
+      this.setBodyOpacity(mesh.userData.body,mesh.userData.opacity);
+      for(const child of mesh.children) child.visible=child instanceof THREE.LineSegments
+        ? child.name==='solid-edges' ? mode==='edges' || mode==='solid-edges' : child.name===mode
+        : mode==='edges';
     }
   }
 
@@ -300,7 +344,7 @@ export class Viewer {
       geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
       const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({vertexColors: true, roughness: 0.72, metalness: 0.08, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1}));
-      mesh.userData = {body, faceIds, base: color};
+      mesh.userData = {body, faceIds, base: color, opacity: 1};
       const originalEdges = bodyEdges.get(body)!;
       const edgePositions = new Float32Array(originalEdges.length * 6);
       originalEdges.forEach((edge,index)=>{
@@ -311,14 +355,25 @@ export class Viewer {
       });
       const edgeGeometry = new THREE.BufferGeometry();
       edgeGeometry.setAttribute('position',new THREE.BufferAttribute(edgePositions,3));
-      const edges = new THREE.LineSegments(edgeGeometry, new THREE.LineBasicMaterial({color: 0x24394b, transparent: true, opacity: 0.35}));
-      edges.visible = this.renderMode!=='solid';
-      mesh.material.visible=this.renderMode!=='wireframe';
+      const edges = new THREE.LineSegments(edgeGeometry, new THREE.LineBasicMaterial({color: 0x24394b}));
+      edges.name='wireframe';
+      edges.visible = this.renderMode==='wireframe';
+      mesh.material.visible=this.renderMode!=='edges';
       mesh.add(edges);
       const selectionGeometry=new THREE.BufferGeometry();
       selectionGeometry.setAttribute('position',geometry.getAttribute('position'));selectionGeometry.setIndex([]);
       const selection=new THREE.Mesh(selectionGeometry,new THREE.MeshBasicMaterial({color:0xffbc58,side:THREE.DoubleSide,transparent:true,opacity:.65,depthWrite:false}));
-      selection.visible=this.renderMode==='wireframe';mesh.add(selection);
+      selection.visible=this.renderMode==='edges';mesh.add(selection);
+      const outlineSource=new THREE.BufferGeometry();
+      outlineSource.setAttribute('position',geometry.getAttribute('position').clone());
+      const center=geometry.boundingSphere!.center,scale=1000/geometry.boundingSphere!.radius;
+      // 统一提取时的尺寸，保持米制小模型的棱边精度。
+      outlineSource.translate(-center.x,-center.y,-center.z).scale(scale,scale,scale);
+      const outlineGeometry=new THREE.EdgesGeometry(outlineSource,30);
+      outlineGeometry.scale(1/scale,1/scale,1/scale).translate(center.x,center.y,center.z);
+      outlineSource.dispose();
+      const outline=new THREE.LineSegments(outlineGeometry,new THREE.LineBasicMaterial({color:0x24394b,transparent:true,opacity:.65,depthWrite:false}));
+      outline.name='solid-edges';outline.visible=this.renderMode==='edges' || this.renderMode==='solid-edges';mesh.add(outline);
       this.models.add(mesh);
       this.meshes.push(mesh);
     }
@@ -427,10 +482,12 @@ export class Viewer {
     this.highlight([...this.selected]);
   }
   setBodyOpacity(body: number, opacity: number) {
-    const material = this.meshes.find(mesh=>mesh.userData.body===body)!.material;
-    material.opacity = opacity;
-    material.transparent = opacity < 1;
-    material.depthWrite = opacity === 1;
+    const mesh = this.meshes.find(mesh=>mesh.userData.body===body)!;
+    mesh.userData.opacity=opacity;
+    const material=mesh.material;
+    material.opacity = this.renderMode==='wireframe' ? 1 : opacity;
+    material.transparent = material.opacity < 1;
+    material.depthWrite = material.opacity === 1;
     material.needsUpdate = true;
   }
   showEdges(visible: boolean) {
@@ -439,18 +496,32 @@ export class Viewer {
   showArrows(centers: number[][], directions: number[][], area: number, faces?: number[]) {
     this.clearArrows();
     if (!centers.length) return;
+    const animate=!matchMedia('(prefers-reduced-motion: reduce)').matches;
     const length = this.arrowLength = 0.6 * Math.sqrt(area / centers.length);
     centers.forEach((center, i) => {
       const direction = new THREE.Vector3().fromArray(directions[i]);
       const point = new THREE.Vector3().fromArray(center).sub(this.origin);
       const arrow = new THREE.ArrowHelper(direction, point.clone().addScaledVector(direction, -length), length, 0x078b94, length*0.25, length*0.12);
+      for(const material of [arrow.line.material,arrow.cone.material] as THREE.Material[]) {
+        material.transparent=true;material.opacity=animate?0:1;material.depthWrite=false;
+      }
       const mesh=faces ? this.meshes.find(mesh=>(mesh.userData.faceIds as number[]).includes(faces[i])) : undefined;
       arrow.userData={basePosition:arrow.position.clone(),body:mesh?.userData.body};
       if(mesh) {arrow.position.add(mesh.position);arrow.visible=mesh.visible;}
       this.arrows.add(arrow);
     });
+    this.arrowFadeStart=animate?performance.now():null;
   }
-  clearArrows() { this.clearGroup(this.arrows); this.arrowLength = 0; }
+  private updateArrowFade() {
+    if(this.arrowFadeStart===null) return;
+    const progress=Math.min(1,(performance.now()-this.arrowFadeStart)/260),opacity=1-(1-progress)**3;
+    for(const arrow of this.arrows.children as THREE.ArrowHelper[]) {
+      (arrow.line.material as THREE.Material).opacity=opacity;
+      (arrow.cone.material as THREE.Material).opacity=opacity;
+    }
+    if(progress===1) this.arrowFadeStart=null;
+  }
+  clearArrows() { this.arrowFadeStart=null;this.clearGroup(this.arrows); this.arrowLength = 0; }
   configureWeldPreview(parameters: HeatParameters, direction: number[], scale: number) {
     this.clearGroup(this.torch); this.heat=new THREE.Group();
     const upper=parameters.conical_upper_radius*scale, lower=parameters.conical_lower_radius*scale, depth=parameters.conical_depth*scale;
@@ -562,8 +633,41 @@ export class Viewer {
     }
   }
   showPaths(visible: boolean) {
-    this.pathScene.visible=visible;
+    this.paths.visible=visible;this.weldTrails.visible=visible;
+    this.pathScene.visible=visible || this.conversion.visible;
     if(!visible) this.clearPathHover();
+  }
+  setConversion(paths: number[][][], nodes: number[][], items:{node_id:number;component:string}[]=[], missing:{xyz_mm:number[];component:string;path_id:number}[]=[]) {
+    this.clearGroup(this.conversionPaths);this.clearGroup(this.conversionNodes);this.clearGroup(this.conversionMissing);this.clearPathHover();
+    this.conversionBounds.makeEmpty();
+    for(const path of paths) {
+      const points=path.map(xyz=>new THREE.Vector3().fromArray(xyz).sub(this.origin));
+      points.forEach(point=>this.conversionBounds.expandByPoint(point));
+      const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0xd97c25,depthTest:false,depthWrite:false}));
+      line.renderOrder=23;this.conversionPaths.add(line);
+    }
+    if(nodes.length) {
+      const points3d=nodes.map(xyz=>new THREE.Vector3().fromArray(xyz).sub(this.origin));
+      points3d.forEach(point=>this.conversionBounds.expandByPoint(point));
+      const geometry=new THREE.BufferGeometry().setFromPoints(points3d);
+      const points=new THREE.Points(geometry,new THREE.PointsMaterial({color:0x16859a,size:this.conversionNodeSize,sizeAttenuation:false,depthTest:false,depthWrite:false}));
+      points.userData.items=items;points.renderOrder=24;this.conversionNodes.add(points);
+    }
+    if(missing.length) {
+      const positions=missing.map(item=>new THREE.Vector3().fromArray(item.xyz_mm).sub(this.origin));
+      positions.forEach(point=>this.conversionBounds.expandByPoint(point));
+      const points=new THREE.Points(new THREE.BufferGeometry().setFromPoints(positions),new THREE.PointsMaterial({color:0xd94848,size:this.conversionNodeSize+2,sizeAttenuation:false,depthTest:false,depthWrite:false}));
+      points.userData.items=missing;points.renderOrder=25;this.conversionMissing.add(points);
+    }
+  }
+  setConversionNodeSize(size:number) {
+    this.conversionNodeSize=size;
+    for(const group of [this.conversionNodes,this.conversionMissing])for(const object of group.children)if(object instanceof THREE.Points)object.material.size=size+(group===this.conversionMissing?2:0);
+  }
+  showConversion(visible: boolean, pathsVisible=true, nodesVisible=true) {
+    this.conversion.visible=visible;this.conversionPaths.visible=pathsVisible;this.conversionNodes.visible=nodesVisible;
+    this.conversionMissing.visible=nodesVisible;this.clearPathHover();
+    if(visible) this.pathScene.visible=true;
   }
   showPathSelection(visible: boolean) {
     this.paths.visible=visible;

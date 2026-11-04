@@ -7,9 +7,17 @@ test('载荷名称显示、多个勾选与折叠分组保留数据',async({page}
   await page.locator('#file').setInputFiles('work/elemtype7_tension.dat');
   await expect(page.locator('#busy')).toBeHidden();
   await page.locator('#tool-surface-load').click();await page.locator('[data-view=xy]').click();
+  await page.evaluate(()=>{
+    (window as any).selectionMaskShown=false;
+    const mask=document.getElementById('busy')!;
+    new MutationObserver(records=>{
+      if(records.some(record=>record.attributeName==='hidden' && record.oldValue!==null)) (window as any).selectionMaskShown=true;
+    }).observe(mask,{attributes:true,attributeOldValue:true,attributeFilter:['hidden']});
+  });
   await page.locator('#viewport canvas').click();
   await expect.poll(async()=>Number(await page.locator('#selected-count').textContent())).toBeGreaterThan(0);
   await expect(page.locator('#force-info')).toContainText('合力');
+  expect(await page.evaluate(()=>(window as any).selectionMaskShown)).toBe(false);
   await expect(page.locator('#preview,#all-bodies')).toHaveCount(0);
   await page.locator('#load-name').fill('载荷 A');await page.locator('#save-load').click();
   await expect(page.locator('.load-select')).toHaveCount(1);

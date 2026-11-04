@@ -4,7 +4,19 @@
 .import-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); margin-bottom: var(--space-lg); }
 .import-heading h2 { margin: 0; font-size: 18px; }
 .import-heading button { font-size: 20px; padding: 0 var(--space-sm); }
-.model-dialog .directory-button { width: 100%; padding: 0; border: 0; background: transparent; }
+.model-units { margin-top: var(--space-md); }
+.import-options { margin-top: var(--space-sm); font-size: 12px; color: var(--color-muted); }
+.import-options > summary { cursor: pointer; padding: var(--space-sm) 0; }
+.import-options .directory-button { width: 100%; }
 #model-import-status, #model-import-error { margin: var(--space-md) 0 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 #model-import-status { color: var(--color-accent-hover); }
 #model-import-error { color: var(--color-error); }
+.busy-content { display:grid;gap:12px;min-width:240px;max-width:calc(100% - 80px); }
+#import-progress,#model-dialog-progress { display:block;width:100%;height:6px;border:0;border-radius:6px;overflow:hidden;accent-color:var(--color-accent);background:var(--color-rule); }
+#import-progress[hidden],#model-dialog-progress[hidden] { display:none; }
+#import-progress::-webkit-progress-bar,#model-dialog-progress::-webkit-progress-bar { background:var(--color-rule);border-radius:6px; }
+#import-progress::-webkit-progress-value,#model-dialog-progress::-webkit-progress-value { background:var(--color-accent);border-radius:6px;transition:width .2s ease; }
+#import-progress:indeterminate,#model-dialog-progress:indeterminate { background:linear-gradient(90deg,var(--color-rule) 0%,var(--color-accent) 45%,var(--color-rule) 75%);background-size:200% 100%;animation:import-progress-motion 1.5s linear infinite; }
+#import-progress:indeterminate::-webkit-progress-bar,#model-dialog-progress:indeterminate::-webkit-progress-bar { background:transparent; }
+@keyframes import-progress-motion { from {background-position:100% 0;} to {background-position:-100% 0;} }
+@media (prefers-reduced-motion:reduce) { #import-progress,#model-dialog-progress {animation:none!important;} }

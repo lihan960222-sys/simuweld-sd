@@ -23,6 +23,16 @@ def test_rejects_untrusted_requests(client):
     assert client.get("/api/model", headers={"X-Session-Token": "integration-token", "Host": "other.example"}).status_code == 403
 
 
+@pytest.mark.parametrize("endpoint,length,message", [
+    ("/api/model", 512 * 1024**2 + 1, "512 MB"),
+    ("/api/thermal/temperatures", 10 * 1024**3 + 1024**2 + 1, "10 GB"),
+])
+def test_rejects_oversized_content_length_before_body(client, endpoint, length, message):
+    response = client.post(endpoint, headers={"X-Session-Token": "integration-token", "Content-Length": str(length)})
+    assert response.status_code == 413
+    assert message in response.json()["detail"]
+
+
 def test_real_upload_selection_preview_and_export(client):
     path = Path(os.environ["SFMARC_TEST_DAT"])
     headers = {"X-Session-Token": "integration-token"}

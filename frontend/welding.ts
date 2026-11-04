@@ -69,24 +69,27 @@ export class WeldingTool {
       <section><h2>Simufact 设置</h2>
         <label>Process<input id="weld-process" value="Process-1" maxlength="80"></label>
         <label>Robot<input id="weld-robot" value="Robot-1" maxlength="80"></label>
-        <label>方向向量（local-vector）</label><div class="input-row"><label>X<input id="weld-dx" type="number" step="any" value="0"></label><label>Y<input id="weld-dy" type="number" step="any" value="0"></label><label>Z<input id="weld-dz" type="number" step="any" value="1"></label></div>
-        <p class="hint">方向向量表示焊枪朝向外部的一侧，圆锥沿反方向进入模型。Process 需已存在，Robot 使用空对象或新名称。脚本创建新热源。</p>
+        <label title="方向向量指向焊枪外侧，圆锥沿反方向进入模型。">焊枪方向（local-vector）</label><div class="input-row"><label>X<input id="weld-dx" type="number" step="any" value="0"></label><label>Y<input id="weld-dy" type="number" step="any" value="0"></label><label>Z<input id="weld-dz" type="number" step="any" value="1"></label></div>
+        <p class="hint">Process 需已存在；Robot 使用空对象或新名称。</p>
       </section>`;
     this.heat=new HeatSettings(()=>this.heatChanged());
     const heatControls=document.createElement('div');
-    heatControls.innerHTML=`<label>已创建热源<select id="weld-heat-profile" disabled></select></label>
-      <label>热源名称<input id="weld-heat-name" value="SD-Laser-1" maxlength="80" required></label>
-      <div class="row-buttons"><button id="weld-heat-save" class="primary">创建热源</button><button id="weld-heat-new" disabled>新增热源</button><button id="weld-heat-cancel" hidden>取消修改</button></div>
-      <p id="weld-heat-status" class="hint">填写参数后创建热源，再分配给焊路。</p>`;
+    heatControls.innerHTML=`<label>热源名称<input id="weld-heat-name" value="SD-Laser-1" maxlength="80" required></label>`;
     this.heat.section.querySelector('h2')!.after(heatControls);
+    const heatActions=document.createElement('div');
+    heatActions.innerHTML=`<div class="weld-heat-actions"><button id="weld-heat-save" class="primary">创建热源</button><button id="weld-heat-cancel" hidden>取消修改</button></div>
+      <p id="weld-heat-status" class="hint" role="status" aria-live="polite">热源参数尚未保存。</p>
+      <div id="weld-heat-library" class="weld-heat-library" hidden><label>已保存热源<select id="weld-heat-profile" disabled></select></label><button id="weld-heat-new" disabled>新增热源</button></div>`;
+    this.heat.section.append(heatActions);
     this.panel.querySelector('.tool-heading')!.after(this.heat.section);
     document.querySelector('main')!.append(this.panel);
     for(const [id,icon,label] of [
       ['weld-pick-start','start','拾取起点'],['weld-pick-end','end','拾取终点'],['weld-full','path','整条路径'],
       ['weld-reverse','reverse','反向'],['weld-add','add','添加焊路'],['weld-cancel','close','取消编辑'],
       ['weld-all','playAll','按顺序播放全部焊路'],['weld-play','play','播放'],['weld-reset','reset','回到起点'],
-      ['weld-heat-save','save','创建热源'],['weld-heat-new','add','新增热源'],['weld-heat-cancel','close','取消修改'],
+      ['weld-heat-new','add','新增热源'],['weld-heat-cancel','close','取消修改'],
     ] as const) setIcon(this.element(id),icon,label);
+    this.updateHeatSaveButton();
     this.panel.addEventListener('input',event=>{
       const target=event.target as HTMLElement;
       if(target.id!=='weld-rate' && target.id!=='weld-progress') this.invalidatePreview();
@@ -97,7 +100,7 @@ export class WeldingTool {
       this.heatEditing=null;this.heat.setValue();
       let index=this.heats.length+1;while(this.heats.some(heat=>heat.name==='SD-Laser-'+index)) index++;
       this.field('weld-heat-name').value='SD-Laser-'+index;
-      setIcon(this.element('weld-heat-save'),'save','创建热源');this.heatChanged();
+      this.heatChanged();this.field('weld-heat-name').focus();this.field('weld-heat-name').select();
     };
     this.element('weld-heat-cancel').onclick=()=>this.loadHeat(this.heatEditing ?? Number(this.select('weld-heat-profile').value));
     this.select('weld-heat-profile').onchange=()=>this.loadHeat(Number(this.select('weld-heat-profile').value));
@@ -186,11 +189,17 @@ export class WeldingTool {
     if(this.active && this.framePathsOnActivate) {this.viewer.fitPaths();this.framePathsOnActivate=false;this.viewer.showPaths(this.field('weld-visible').checked);}
   }
 
+  private updateHeatSaveButton() {
+    const button=this.element<HTMLButtonElement>('weld-heat-save'),label=this.heatEditing===null?'创建热源':'保存热源修改';
+    setIcon(button,'save',label);button.classList.remove('icon-button');button.append(document.createTextNode(label));
+    button.disabled=!this.heatDirty || !this.heat.valid || !this.field('weld-heat-name').value.trim();
+  }
   private heatChanged() {
     this.heatDirty=true;
     this.select('weld-heat-profile').disabled=true;this.element<HTMLButtonElement>('weld-heat-new').disabled=true;
     this.element('weld-heat-cancel').hidden=!this.heats.length;
     this.element('weld-heat-status').textContent='热源参数尚未保存。';
+    this.updateHeatSaveButton();
     this.invalidatePreview();this.services.changed();
   }
   private loadHeat(index: number) {
@@ -198,7 +207,8 @@ export class WeldingTool {
     this.heat.setValue(profile.parameters);this.field('weld-heat-name').value=profile.name;
     this.select('weld-heat-profile').value=String(index);this.select('weld-heat-profile').disabled=false;
     this.element<HTMLButtonElement>('weld-heat-new').disabled=false;
-    this.element('weld-heat-cancel').hidden=true;setIcon(this.element('weld-heat-save'),'save','保存热源修改');
+    this.element('weld-heat-cancel').hidden=true;this.element('weld-heat-library').hidden=false;
+    this.updateHeatSaveButton();
     this.element('weld-heat-status').textContent=`已保存 ${this.heats.length} 组热源。`;
     this.invalidatePreview();this.services.changed();
   }

@@ -1,11 +1,11 @@
-import { createElement, Plus, Save, Pencil, Trash2, X, Play, Pause, RotateCcw, ArrowLeftRight, MapPin, MapPinCheck, Route, GripVertical, Layers3, ListVideo, Eye, Upload, Download, Info, Boxes, Focus } from 'lucide';
+import { createElement, Plus, Save, Pencil, Trash2, X, Play, Pause, RotateCcw, ArrowLeftRight, MapPin, MapPinCheck, Route, GripVertical, Layers3, ListVideo, Eye, Upload, Download, Info, Boxes, Focus, SlidersHorizontal } from 'lucide';
 
 const icons = {
   add: Plus, save: Save, edit: Pencil, delete: Trash2, close: X,
   play: Play, pause: Pause, reset: RotateCcw, reverse: ArrowLeftRight,
   start: MapPin, end: MapPinCheck, path: Route, grip: GripVertical,
   all: Layers3, playAll: ListVideo, eye: Eye, upload: Upload, download: Download,
-  info: Info, explode: Boxes, focus: Focus,
+  info: Info, explode: Boxes, focus: Focus, settings: SlidersHorizontal,
 };
 export type IconName = keyof typeof icons;
 export function setIcon(button: HTMLElement, name: IconName, label: string) {

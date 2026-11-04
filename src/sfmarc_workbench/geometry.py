@@ -59,7 +59,9 @@ def integrate_face(points):
 
 
 class SurfaceModel:
-    def __init__(self, deck: Deck):
+    def __init__(self, deck: Deck, progress=None):
+        if progress is not None:
+            progress("整理节点坐标")
         self.deck = deck
         self.node_ids = np.array(deck.mesh.node_order, dtype=np.int64)
         self.points = np.array([deck.mesh.nodes[int(n)] for n in self.node_ids], dtype=np.float64)
@@ -74,6 +76,8 @@ class SurfaceModel:
         interior = set()
         rows, cols = [], []
         centers = []
+        if progress is not None:
+            progress("处理单元", 0, len(elements), "个单元")
         for cell, (element_id, kind, nodes) in enumerate(elements):
             conn = [node_index[n] for n in nodes]
             centers.append(self.points[list(set(conn))].mean(axis=0))
@@ -91,9 +95,15 @@ class SurfaceModel:
                     interior.add(key)
                 else:
                     shared[key] = (cell, element_id, local, face)
+            if progress is not None and ((cell + 1) % 2000 == 0 or cell + 1 == len(elements)):
+                progress("处理单元", cell + 1, len(elements), "个单元")
+        if progress is not None:
+            progress("识别实体连接")
         graph = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(len(elements), len(elements))).tocsr()
         _, cell_bodies = connected_components(graph, directed=False)
         records = list(shared.values())
+        if progress is not None:
+            progress("计算表面", 0, len(records), "个面")
         self.faces = [record[3] for record in records]
         self.element_ids = np.array([r[1] for r in records], dtype=np.int64)
         self.local_faces = np.array([r[2] for r in records], dtype=np.int32)
@@ -111,9 +121,13 @@ class SurfaceModel:
                 self.faces[i].reverse()
             areas.append(area)
             vectors.append(vector)
+            if progress is not None and ((i + 1) % 2000 == 0 or i + 1 == len(records)):
+                progress("计算表面", i + 1, len(records), "个面")
         self.areas = np.array(areas)
         self.area_vectors = np.array(vectors)
         self.normals = self.area_vectors / np.linalg.norm(self.area_vectors, axis=1)[:, None]
+        if progress is not None:
+            progress("建立表面连接")
         edges = defaultdict(list)
         self.neighbors = [[] for _ in self.faces]
         for i, face in enumerate(self.faces):
@@ -134,7 +148,11 @@ class SurfaceModel:
                 self.triangle_faces.append(i)
         self.triangles = np.array(self.triangles, dtype=np.uint32)
         self.triangle_faces = np.array(self.triangle_faces, dtype=np.uint32)
+        if progress is not None:
+            progress("计算实体体积")
         self.body_volumes = body_volumes(self.points, self.triangles, self.body_ids[self.triangle_faces])
+        if progress is not None:
+            progress("模型几何处理完成", len(self.faces), len(self.faces), "个面")
 
     def select(self, seed: int, angle: float):
         if seed < 0 or seed >= len(self.faces) or not np.isfinite(angle) or not 0 <= angle <= 180:

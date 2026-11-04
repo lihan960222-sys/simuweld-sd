@@ -22,11 +22,11 @@ export class HeatSettings {
 
   constructor(changed: ()=>void) {
     this.section.innerHTML=`<h2>热源</h2>
-      <details class="heat-parameter-group" open><summary>基本参数</summary><div class="heat-fields" data-group="basic"></div></details>
-      <details class="heat-parameter-group" open><summary>形状尺寸</summary><div class="heat-fields" data-group="shape"></div></details>
-      <details class="heat-parameter-group"><summary>高级参数</summary><div class="heat-fields" data-group="advanced"></div></details>
-      <figure class="heat-preview"><svg id="heat-diagram" viewBox="0 0 300 230" role="img" aria-label="圆锥与表面圆盘热源尺寸示意图"></svg><figcaption class="heat-legend"></figcaption></figure>
-      <p id="heat-error" role="status"></p>`;
+      <div class="heat-parameter-group"><h3>基本参数</h3><div class="heat-fields" data-group="basic"></div></div>
+      <div class="heat-parameter-group"><h3>形状尺寸</h3><div class="heat-fields" data-group="shape"></div></div>
+      <div class="heat-parameter-group"><h3>高级参数</h3><div class="heat-fields" data-group="advanced"></div></div>
+      <p id="heat-error" role="status"></p>
+      <details class="heat-preview-group"><summary>热源示意图</summary><figure class="heat-preview"><svg id="heat-diagram" viewBox="0 0 300 230" role="img" aria-label="圆锥与表面圆盘热源尺寸示意图"></svg><figcaption class="heat-legend"></figcaption></figure></details>`;
     this.svg=this.section.querySelector('svg')!;
     for(const [key,label,value,min,max] of fields) {
       const row=document.createElement('label');row.textContent=label;

@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<HeatSources version="2026.2" product="Simufact Welding" product_version="2026.2.0.1785151010" file_time_stamp="2026-11-03T19:23:16">
+    <GeneralHeatSourceProperties>
+        <comment></comment>
+        <processType enable="true"></processType>
+        <material_combination enable="true"></material_combination>
+        <equipment enable="true"></equipment>
+        <calculationMethod enable="true"></calculationMethod>
+        <importSource enable="true"></importSource>
+        <equipmentManufacturer enable="true"></equipmentManufacturer>
+        <thicknessOfMaterial1 enable="true">0</thicknessOfMaterial1>
+        <thicknessOfMaterial2 enable="true">0</thicknessOfMaterial2>
+        <jointType enable="true">other</jointType>
+        <seamPreparation enable="true"></seamPreparation>
+        <fillerMaterial enable="true"></fillerMaterial>
+        <shildingGas enable="true"></shildingGas>
+        <shildingGasFlow enable="true">0</shildingGasFlow>
+        <fillerTroatThicknessA enable="true">0</fillerTroatThicknessA>
+        <fillerBowThicknessB enable="true">0</fillerBowThicknessB>
+        <legLengthOfTheFillerZ1 enable="true">0</legLengthOfTheFillerZ1>
+        <lefLengthOfTheFillerZ2 enable="true">0</lefLengthOfTheFillerZ2>
+        <gapSize enable="true">0</gapSize>
+        <wireSize enable="true">0</wireSize>
+        <wireFeedVelocity enable="true">0</wireFeedVelocity>
+        <manufacturingMethod enable="true">manual</manufacturingMethod>
+        <weldingPosition enable="true">PA</weldingPosition>
+        <microstructureImages/>
+    </GeneralHeatSourceProperties>
+    <WeldingHeatSource type="Goldak" orderNo="1">
+        <energy_per_length>
+            <efficiency_data>
+                <TableOrConstant type="constant">
+                    <UnitValue dimension="-1" unit="0" unit_symbol="-" Version="1">1.0</UnitValue>
+                </TableOrConstant>
+            </efficiency_data>
+        </energy_per_length>
+        <power>222</power>
+        <shape>
+            <depth>0</depth>
+            <frontLength>0</frontLength>
+            <rearLength>0</rearLength>
+            <width>0</width>
+        </shape>
+        <heatFluxDistribution continuousDistribution="false">
+            <gaussianParameter>3</gaussianParameter>
+        </heatFluxDistribution>
+    </WeldingHeatSource>
+    <WeldingHeatSource type="Conical" orderNo="0">
+        <energy_per_length>
+            <efficiency_data>
+                <TableOrConstant type="constant">
+                    <UnitValue dimension="-1" unit="0" unit_symbol="-" Version="1">1.0</UnitValue>
+                </TableOrConstant>
+            </efficiency_data>
+        </energy_per_length>
+        <power>222</power>
+        <volumeRatio>0.8</volumeRatio>
+        <shape>
+            <depth>0.00021</depth>
+            <uppperRadius>8.999999999999999e-05</uppperRadius>
+            <lowerRadius>1.8e-05</lowerRadius>
+        </shape>
+        <heatFluxDistribution continuousDistribution="false">
+            <gaussianParameter>2</gaussianParameter>
+        </heatFluxDistribution>
+    </WeldingHeatSource>
+    <WeldingHeatSource type="Surface" orderNo="0">
+        <energy_per_length>
+            <efficiency_data>
+                <TableOrConstant type="constant">
+                    <UnitValue dimension="-1" unit="0" unit_symbol="-" Version="1">1.0</UnitValue>
+                </TableOrConstant>
+            </efficiency_data>
+        </energy_per_length>
+        <power>222</power>
+        <shape>
+            <radius>8.000000000000001e-05</radius>
+            <searchDepth>1e-05</searchDepth>
+        </shape>
+        <heatFluxDistribution continuousDistribution="false">
+            <gaussianParameter>1</gaussianParameter>
+        </heatFluxDistribution>
+    </WeldingHeatSource>
+    <WeldingParameters>
+        <velocity>0.21855</velocity>
+        <transient>
+            <upramping enable="true">
+                <duration>0.05</duration>
+                <target>0.5</target>
+            </upramping>
+            <downRamping enable="true">
+                <duration>0.1</duration>
+                <target>0.5</target>
+            </downRamping>
+        </transient>
+    </WeldingParameters>
+</HeatSources>

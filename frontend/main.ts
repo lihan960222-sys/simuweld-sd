@@ -1,7 +1,8 @@
 import './style.css';
 import './import.css';
-import { Viewer, type MeshData } from './viewer';
+import { Viewer, type MeshData, type RenderMode } from './viewer';
 import { WeldingTool } from './welding';
+import { ThermalTool } from './thermal';
 import { setupSidebarResize } from './sidebarResize';
 import { iconButton, setIcon, makeCollapsible } from './ui';
 import './design.css';
@@ -25,14 +26,15 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <main>
     <aside class="left">
       <section class="model-entry">
-        <div class="model-actions"><button id="open-model" class="primary full">打开模型</button><div id="model-info-wrap" class="info-wrap" hidden><button id="model-info-button" aria-label="模型信息" aria-expanded="false" aria-controls="model-info">!</button><div id="model-info" class="model-info" role="tooltip" hidden></div></div></div>
+        <div class="model-actions"><button id="open-model" class="primary full">上传模型</button><div id="model-info-wrap" class="info-wrap" hidden><button id="model-info-button" aria-label="模型信息" aria-expanded="false" aria-controls="model-info">!</button><div id="model-info" class="model-info" role="tooltip" hidden></div></div></div>
+        <div class="import-toolbar"><select id="import-units" aria-label="模型单位" title="模型文件单位"><option value="m">m · kg · s · N · Pa</option><option value="mm">mm · t · s · N · MPa</option></select><details class="import-options"><summary id="import-settings" aria-label="读取设置" title="读取设置"></summary><div class="import-settings-panel"><label>输入格式<select id="model-format"><option value="">自动识别扩展名</option><option value="marc">Marc / sfMarc DAT</option><option value="inp">Abaqus INP</option><option value="bdf">Nastran BDF / NAS / DAT</option><option value="step">CAD STP / STEP</option></select></label></div></details></div>
       </section>
       <section><div class="section-title"><h2>实体</h2><span id="body-count" class="badge">0</span></div><div id="body-list"><p class="muted">导入后可以分别显示实体。</p></div></section>
     </aside>
     <div id="resize-left" class="sidebar-resizer" role="separator" aria-label="调整左侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
-    <div class="workspace"><div class="view-tools"><button id="fit" aria-label="回到中心" title="回到中心"><svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path class="fit-corners" d="M11 4H4v7m21-7h7v7M4 25v7h7m21-7v7h-7"/><path class="fit-model" d="M18 11v14m-7-7h14"/><circle class="fit-model" cx="18" cy="18" r="4"/></svg></button><button data-view="xy" aria-label="XY 平面" title="XY 平面">${planeIcon('xy')}</button><button data-view="xz" aria-label="XZ 平面" title="XZ 平面">${planeIcon('xz')}</button><button data-view="yz" aria-label="YZ 平面" title="YZ 平面">${planeIcon('yz')}</button><select id="projection" aria-label="投影方式"><option value="perspective">透视</option><option value="orthographic">正交</option></select><select id="render-mode" aria-label="渲染模式"><option value="solid">实体</option><option value="wireframe">框线</option><option value="solid-edges">实体与边线</option></select><button id="explode" aria-label="爆炸图" title="爆炸图" aria-expanded="false" disabled>爆炸图</button><label id="explosion-control" hidden>展开程度<input id="explosion" aria-label="爆炸图展开程度" type="range" min="0" max="100" value="0"><output id="explosion-value">0%</output></label></div>
-      <div id="viewport"></div><div id="empty"><img class="empty-shape" src="/icon.svg" alt="" width="64" height="64"><h1>打开模型</h1><p>支持 DAT、INP、BDF 和 STEP 等格式。</p></div>
-      <div id="busy" hidden><span class="spinner"></span><span id="busy-text">正在读取模型…</span></div>
+    <div class="workspace"><div class="view-tools"><button id="fit" aria-label="回到中心" title="回到中心"><svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path class="fit-corners" d="M11 4H4v7m21-7h7v7M4 25v7h7m21-7v7h-7"/><path class="fit-model" d="M18 11v14m-7-7h14"/><circle class="fit-model" cx="18" cy="18" r="4"/></svg></button><button data-view="xy" aria-label="XY 平面" title="XY 平面">${planeIcon('xy')}</button><button data-view="xz" aria-label="XZ 平面" title="XZ 平面">${planeIcon('xz')}</button><button data-view="yz" aria-label="YZ 平面" title="YZ 平面">${planeIcon('yz')}</button><select id="projection" aria-label="投影方式"><option value="perspective">透视</option><option value="orthographic">正交</option></select><select id="render-mode" aria-label="渲染模式"><option value="solid">实体</option><option value="wireframe" disabled>网格</option><option value="edges">边线</option><option value="solid-edges">实体与边线</option></select><button id="explode" aria-label="爆炸图" title="爆炸图" aria-expanded="false" disabled>爆炸图</button><label id="explosion-control" hidden>展开程度<input id="explosion" aria-label="爆炸图展开程度" type="range" min="0" max="100" value="0"><output id="explosion-value">0%</output></label></div>
+      <div id="viewport"></div><div id="empty"><img class="empty-shape" src="/icon.svg" alt="SIMUWELD SD" width="64" height="64"><h1>Empowering Welding Simulation</h1></div>
+      <div id="busy" hidden><span class="spinner"></span><div class="busy-content"><span id="busy-text" role="status" aria-live="polite">正在读取模型…</span><progress id="import-progress" aria-label="模型读取进度" hidden></progress></div></div>
       <div class="selection-bar" data-tool="surface-load" hidden><div><strong id="selected-count">0</strong><span>已选面</span></div><div><strong id="area-info">—</strong><span>表面积</span></div><button id="clear">清空选择</button></div>
       <div id="message" role="status" hidden></div>
     </div>
@@ -51,16 +53,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section><div class="section-title"><h2>载荷</h2><button id="show-all-loads" disabled aria-pressed="false"></button><span id="load-count" class="badge">0</span></div><div id="load-list"></div><div id="combined" hidden><label>阶段合力<select id="combined-case"></select></label><p id="combined-force"></p></div></section>
     </aside>
   </main><footer>copyright LH</footer>
-  <dialog id="model-dialog" class="model-dialog" aria-labelledby="model-dialog-title">
-    <div class="import-heading"><h2 id="model-dialog-title">打开模型</h2><button id="close-model-dialog" aria-label="关闭模型导入">×</button></div>
-    <label>输入格式<select id="model-format"><option value="">按文件扩展名</option><option value="marc">Marc / sfMarc DAT</option><option value="inp">Abaqus INP</option><option value="bdf">Nastran BDF / NAS / DAT</option><option value="step">CAD STP / STEP</option></select></label>
-    <label>模型文件单位制<select id="import-units"><option value="m">m · kg · s · N · Pa</option><option value="mm">mm · t · s · N · MPa</option></select></label>
-    <button id="choose-model-files" class="file-button full">选择模型文件</button><input id="file" type="file" accept=".dat,.inp,.bdf,.nas,.stp,.step,.inc,.include" multiple hidden />
-    <button id="choose-model-directory" class="directory-button">选择模型目录（含 INCLUDE）</button><input id="directory" type="file" webkitdirectory multiple hidden />
-    <p class="hint">Marc 的关联文件可以一起选择。DAT 默认按 Marc 读取，Nastran DAT 请在输入格式中指定。STEP 使用文件内的长度定义。</p>
-    <div id="root-picker" hidden><label>主模型文件<select id="root-file"></select></label><button id="import-directory" class="primary full">读取所选模型</button></div>
-    <p id="model-import-status" role="status" hidden>正在读取模型…</p><p id="model-import-error" role="alert" hidden></p>
-  </dialog>`;
+  <input id="file" type="file" accept=".dat,.inp,.bdf,.nas,.stp,.step" hidden />`;
 
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => get<HTMLInputElement>(id);
@@ -83,6 +76,36 @@ let currentPreview: Preview | null = null;
 let previewGeneration=0;
 let modelLengthUnit='m';
 const modelScale=()=>modelLengthUnit==='m'?1000:1;
+let importProgressActive=false;
+let importProgressLocal=false;
+
+function showImportProgress(stage:string,completed:number|null=null,total:number|null=null,unit='') {
+  if(!importProgressActive)return;
+  const counted=completed!==null && total!==null && total>0;
+  const text=counted?`${stage} · 已完成 ${completed.toLocaleString()} / ${total.toLocaleString()} ${unit}`:`${stage}…`;
+  get('busy-text').textContent=text;
+  const progress=get<HTMLProgressElement>('import-progress');progress.hidden=false;progress.setAttribute('aria-valuetext',text);
+  if(counted){progress.max=total;progress.value=completed;}else progress.removeAttribute('value');
+}
+
+function watchImportProgress() {
+  importProgressActive=true;importProgressLocal=false;
+  showImportProgress('正在传输模型文件');
+  let stopped=false,timer=0;
+  const poll=async()=>{
+    try {
+      const state=await (await api('import-progress')).json();
+      if(!stopped && !importProgressLocal && state.active)showImportProgress(state.stage,state.completed,state.total,state.unit);
+    } catch(error) {
+      if(!stopped && !importProgressLocal)showImportProgress(`无法读取进度：${error instanceof Error?error.message:String(error)}`);
+    }
+    if(!stopped)timer=window.setTimeout(poll,250);
+  };
+  timer=window.setTimeout(poll,250);
+  return ()=>{stopped=true;window.clearTimeout(timer);importProgressActive=false;
+    get('import-progress').hidden=true;
+  };
+}
 
 function confirmLeave(event: BeforeUnloadEvent) {
   event.preventDefault();
@@ -108,7 +131,6 @@ function hideMessage() {
 }
 function message(text: string) {
   hideMessage(); get('message').textContent=text; get('message').hidden=false;
-  if(get<HTMLDialogElement>('model-dialog').open) {get('model-import-error').textContent=text;get('model-import-error').hidden=false;}
 }
 function fadeMessage() {
   const notice=get('message');
@@ -118,17 +140,17 @@ function fadeMessage() {
   animation.onfinish=()=>{if(messageAnimation===animation) hideMessage();};
 }
 document.addEventListener('pointerdown',fadeMessage);
-async function run(text: string, action: ()=>Promise<void>) {
+async function run(text: string, action: ()=>Promise<void>, showOverlay=true) {
   if (busy) return;
-  busy = true; get('busy').hidden = false; get('busy-text').textContent = text; fadeMessage();
-  document.querySelectorAll<HTMLElement>('aside, header, .selection-bar, #model-dialog').forEach(element=>element.inert=true);
-  get('model-import-error').hidden=true;get('model-import-status').hidden=false;
+  busy = true; if(showOverlay) get('busy').hidden = false; get('busy-text').textContent = text; fadeMessage();
+  get('viewport').setAttribute('aria-busy','true');
+  document.querySelectorAll<HTMLElement>('aside, header, .selection-bar').forEach(element=>element.inert=true);
   try { await action(); }
   catch (error) { message((error as Error).message); }
   finally {
-    busy = false; get('busy').hidden = true;
-    document.querySelectorAll<HTMLElement>('aside, header, .selection-bar, #model-dialog').forEach(element=>element.inert=false);
-    get('model-import-status').hidden=true;
+    busy = false; if(showOverlay) get('busy').hidden = true;
+    get('viewport').setAttribute('aria-busy','false');
+    document.querySelectorAll<HTMLElement>('aside, header, .selection-bar').forEach(element=>element.inert=false);
     updateExport();
   }
 }
@@ -139,17 +161,26 @@ const welding = new WeldingTool(viewer, {api,run,message,unit:()=>'mm',hasModel:
   get('empty').hidden=!!info || welding.hasPaths;
   updateExport();
 }});
+const thermal = new ThermalTool(viewer,{api,run,message,unit:()=>modelLengthUnit,changed:()=>window.addEventListener('beforeunload',confirmLeave)});
 makeCollapsible();
-setIcon(get('open-model'),'upload','打开模型');setIcon(get('model-info-button'),'info','模型信息');
+function setModelUploadButton(replace=false) {
+  const button=get('open-model');
+  setIcon(button,'upload',replace?'重新上传模型':'上传模型');
+  button.classList.remove('icon-button');
+  const label=document.createElement('span');label.textContent='上传模型';button.append(label);
+}
+setModelUploadButton();setIcon(get('model-info-button'),'info','模型信息');
+setIcon(get('import-settings'),'settings','读取设置');
 setIcon(get('save-load'),'save','保存载荷');setIcon(get('clear'),'close','清空选择');
 setIcon(get('show-all-loads'),'all','显示全部载荷');setIcon(get('explode'),'explode','爆炸图');
 setIcon(get('fit'),'focus','回到中心');
 const workspaceTools: WorkspaceTool[] = [
   {id:'model', label:'模型查看'},
   {id:'surface-load', label:'面载荷', activate:()=>{if(displayedLoads.size) drawSavedLoads();else {viewer.highlight(selected); drawPreview();}}, pick:face=>{
-    void run('正在选择表面…',async()=>{baseSelection=[...selected];lastSeed=face;await pick();});
+    void run('正在选择表面…',async()=>{baseSelection=[...selected];lastSeed=face;await pick();},false);
   }},
   {id:'welding', label:'生成焊路'},
+  {id:'thermal-cycle', label:'转换至热循环模式'},
 ];
 for (const tool of workspaceTools) {
   const button=document.createElement('button'); button.textContent=tool.label; button.id='tool-'+tool.id;
@@ -159,12 +190,12 @@ function activateTool(tool: WorkspaceTool) {
   if(busy || activeTool===tool) return;
   if(tool.id==='surface-load' && info?.supports_loads===false) {message('面载荷需要导入 Marc DAT 模型。');return;}
   activeTool=tool;
-  if(tool.id==='welding') resetExplosion();
-  get<HTMLButtonElement>('explode').disabled=!info || tool.id==='welding';
+  if(tool.id==='welding' || tool.id==='thermal-cycle') resetExplosion();
+  get<HTMLButtonElement>('explode').disabled=!info || tool.id==='welding' || tool.id==='thermal-cycle';
   document.querySelectorAll<HTMLElement>('[data-tool]').forEach(panel=>panel.hidden=panel.dataset.tool!==tool.id);
   document.querySelector('main')!.classList.toggle('has-tool-panel',!!document.querySelector('aside.right:not([hidden])'));
   workspaceTools.forEach(item=>get('tool-'+item.id).setAttribute('aria-pressed',String(item===tool)));
-  viewer.highlight([]); viewer.clearArrows(); welding.activate(tool.id==='welding'); tool.activate?.(); updateExport();
+  viewer.highlight([]); viewer.clearArrows(); welding.activate(tool.id==='welding'); thermal.activate(tool.id==='thermal-cycle'); tool.activate?.(); updateExport();
   get('empty').hidden=!!info || (tool.id==='welding' && welding.hasPaths);
 }
 activateTool(workspaceTools[0]);
@@ -229,6 +260,7 @@ function drawSavedLoads() {
 }
 
 function updateExport() {
+  get('export').hidden=activeTool?.id==='thermal-cycle';
   if(activeTool?.id==='welding') {
     setIcon(get('export'),'download','导出 Python 脚本');
     get<HTMLButtonElement>('export').disabled=busy || !welding.canExport;
@@ -277,22 +309,28 @@ function updateCombined() {
   get('combined-force').textContent=`合力 (${force.map(format).join(', ')}) N`;
 }
 
-function fileName(file: File) { return file.webkitRelativePath ? file.webkitRelativePath.split('/').slice(1).join('/') : file.name; }
 async function importFiles(root: string) {
   const data = new FormData(); data.append('root',root);
-  files.forEach(file=>data.append('files',file,fileName(file)));
+  files.forEach(file=>data.append('files',file,file.name));
   const next: ModelInfo = await (await api('model',data)).json();
-  await displayModel(next);
+  await displayModel(next,true);
 }
 
-async function displayModel(next: ModelInfo) {
+async function displayModel(next: ModelInfo, hasMesh: boolean) {
   info=next;
+  select('render-mode').querySelector<HTMLOptionElement>('[value=wireframe]')!.disabled=!hasMesh;
+  if(!hasMesh && select('render-mode').value==='wireframe') {
+    select('render-mode').value='edges';viewer.setRenderMode('edges');
+  }
   modelLengthUnit=info.length_unit || select('import-units').value;
+  importProgressLocal=true;showImportProgress('正在传输模型显示数据');
   mesh=await (await api('mesh')).json();
+  showImportProgress('正在构建视窗模型');
+  await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
   mesh!.points=mesh!.points.map(value=>value*modelScale());
   viewer.load(mesh!); get('empty').hidden=true; selected=[]; loads.length=0; editing=null; lastSeed=null;
-  resetExplosion();get<HTMLButtonElement>('explode').disabled=activeTool.id==='welding';
-  setIcon(get('open-model'),'upload','删除并重新上传');get('model-info-wrap').hidden=false;
+  resetExplosion();get<HTMLButtonElement>('explode').disabled=activeTool.id==='welding' || activeTool.id==='thermal-cycle';
+  setModelUploadButton(true);get('model-info-wrap').hidden=false;
   get('model-info').textContent=`${info.filename}\n${info.nodes.toLocaleString()} 节点\n${info.elements.toLocaleString()} 单元 · ${info.faces.toLocaleString()} 外表面`;
   get('body-count').textContent=String(info.bodies.length);
   const bodies=get('body-list'); bodies.replaceChildren();
@@ -339,18 +377,23 @@ async function displayModel(next: ModelInfo) {
     if (!item.initial) combined.add(new Option(item.name,String(item.id)));
   });
   updateSelection(); renderLoads(); welding.refresh();
+  if(activeTool.id==='thermal-cycle')showImportProgress('正在计算焊路采样节点');
+  await thermal.modelChanged(info.supports_loads);
 }
 
 async function openSelectedModel() {
-  const root=select('root-file').value;
-  const file=files.find(item=>fileName(item)===root);
-  if(!file) throw new Error('请选择主模型文件。');
+  const file=files[0];
+  if(!file) throw new Error('请选择模型文件。');
+  const root=file.name;
   const format=select('model-format').value;
   const extension=file.name.split('.').pop()!.toLowerCase();
+  const stopProgress=watchImportProgress();
+  try {
   if(format==='marc' || (!format && extension==='dat')) await importFiles(root);
   else {
     const data=new FormData();data.append('file',file);if(format) data.append('format',format);
-    await displayModel(await (await api('background',data)).json());
+    const fileFormat=format || extension;
+    await displayModel(await (await api('background',data)).json(),fileFormat!=='stp' && fileFormat!=='step');
     if(activeTool.id==='surface-load') {
       activeTool=workspaceTools[0];
       document.querySelectorAll<HTMLElement>('[data-tool]').forEach(panel=>panel.hidden=true);
@@ -358,41 +401,23 @@ async function openSelectedModel() {
       workspaceTools.forEach(tool=>get('tool-'+tool.id).setAttribute('aria-pressed',String(tool===activeTool)));
     }
   }
-  get<HTMLDialogElement>('model-dialog').close();
-  input('file').value='';input('directory').value='';
+  input('file').value='';
+  } finally {stopProgress();}
 }
 
-function prepareModelFiles(nextFiles: File[], automatic: boolean) {
+function prepareModelFiles(nextFiles: File[]) {
   if(!nextFiles.length) return;
-  files=nextFiles;
-  const roots=files.filter(file=>/\.(dat|inp|bdf|nas|stp|step)$/i.test(file.name));
-  const picker=select('root-file');picker.replaceChildren();roots.forEach(file=>picker.add(new Option(fileName(file),fileName(file))));
-  get('root-picker').hidden=!roots.length;
-  if(!roots.length) {message('所选文件中没有支持的模型格式。');return;}
-  if(automatic && roots.length===1) void run('正在读取模型，请稍候…',openSelectedModel);
+  files=[nextFiles[0]];
+  void run('正在读取模型，请稍候…',openSelectedModel);
 }
 get('open-model').onclick=()=>{
-  if(info) void run('正在删除模型…',async()=>{
-    await api('model/clear',{});info=null;mesh=null;selected=[];loads.length=0;editing=null;lastSeed=null;
-    viewer.clearModel();resetExplosion();updateSelection();renderLoads();welding.refresh();
-    setIcon(get('open-model'),'upload','打开模型');get('model-info-wrap').hidden=true;infoPinned=false;showInfo(false);
-    get('body-list').replaceChildren();get('body-count').textContent='0';get<HTMLButtonElement>('explode').disabled=true;
-    get('empty').hidden=activeTool.id==='welding' && welding.hasPaths;
-    get<HTMLDialogElement>('model-dialog').showModal();
-  });
-  else {get('model-import-error').hidden=true;get<HTMLDialogElement>('model-dialog').showModal();}
+  if(!busy) {input('file').value='';input('file').click();}
 };
-get('choose-model-files').onclick=()=>input('file').click();
-get('choose-model-directory').onclick=()=>input('directory').click();
-get('close-model-dialog').onclick=()=>get<HTMLDialogElement>('model-dialog').close();
-get<HTMLDialogElement>('model-dialog').oncancel=event=>{if(busy) event.preventDefault();};
-input('file').onchange=()=>prepareModelFiles(Array.from(input('file').files || []),true);
-input('directory').onchange=()=>prepareModelFiles(Array.from(input('directory').files || []),false);
-get('import-directory').onclick=()=>{void run('正在读取模型，请稍候…',openSelectedModel);};
+input('file').onchange=()=>prepareModelFiles(Array.from(input('file').files || []));
 get('fit').onclick=()=>viewer.recenter();
 document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach(button=>button.onclick=()=>viewer.fit(button.dataset.view!));
 select('projection').onchange=()=>viewer.setProjection(select('projection').value as 'perspective'|'orthographic');
-select('render-mode').onchange=()=>viewer.setRenderMode(select('render-mode').value as 'solid'|'wireframe'|'solid-edges');
+select('render-mode').onchange=()=>viewer.setRenderMode(select('render-mode').value as RenderMode);
 function resetExplosion() {
   input('explosion').value='0';get('explosion-value').textContent='0%';viewer.setExplosion(0);
   get('explosion-control').hidden=true;get('explode').setAttribute('aria-expanded','false');
@@ -408,9 +433,13 @@ get('model-info-button').onfocus=()=>showInfo(true);
 get('model-info-button').onblur=()=>{if(!infoPinned) showInfo(false);};
 document.addEventListener('pointerdown',event=>{if(!get('model-info-wrap').contains(event.target as Node)){infoPinned=false;showInfo(false);}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'){infoPinned=false;showInfo(false);}});
+const importOptions=document.querySelector<HTMLDetailsElement>('.import-options')!;
+document.addEventListener('pointerdown',event=>{if(!importOptions.contains(event.target as Node))importOptions.open=false;});
+document.addEventListener('keydown',event=>{if(event.key==='Escape' && importOptions.open){importOptions.open=false;get('import-settings').focus();}});
+select('model-format').onchange=()=>{importOptions.open=false;};
 setupSidebarResize(document.querySelector('main')!);
 input('angle').oninput=()=>{get('angle-value').textContent=input('angle').value+'°';};
-input('angle').onchange=()=>{if(lastSeed!==null) void run('正在更新选择…',pick);};
+input('angle').onchange=()=>{if(lastSeed!==null) void run('正在更新选择…',pick,false);};
 get('clear').onclick=()=>{if(!busy){selected=[];lastSeed=null;editing=null;updateSelection();}};
 function refreshLoadPreview() {
   if(busy || !selected.length || !info) return;

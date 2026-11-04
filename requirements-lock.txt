@@ -2,8 +2,11 @@ altgraph==0.17.5
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
+bottle==0.13.4
+cffi==2.1.1
 certifi==2026.10.23
 click==8.5.0
+clr-loader==0.3.1
 colorama==0.4.6
 fastapi==0.162.0
 fortranformat==2.0.3
@@ -20,6 +23,8 @@ opentelemetry-api==1.45.1
 packaging==26.3
 pefile==2024.8.26
 pluggy==1.7.0
+proxy-tools==0.1.0
+pycparser==3.12
 pydantic==2.14.1
 pydantic-core==2.50.1
 pygments==2.21.0
@@ -27,6 +32,8 @@ pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.9
 pytest==9.1.1
 python-multipart==0.0.32
+pythonnet==3.2.1
+pywebview==6.2.1
 pywin32-ctypes==0.2.3
 rich==15.0.0
 scipy==1.18.1

@@ -264,7 +264,7 @@ test('远处路径不改变模型深度精度、材质和边线显示',async({pa
       for(let i=0;i<2;i++) await new Promise(requestAnimationFrame);
       const gl=viewer.renderer.getContext(),pixels=new Uint8Array(gl.drawingBufferWidth*gl.drawingBufferHeight*4);
       gl.readPixels(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
-      return {pixels,near:viewer.camera.near,far:viewer.camera.far,materials:viewer.meshes.map((mesh:any)=>({color:mesh.userData.base.getHex(),opacity:mesh.material.opacity,depthWrite:mesh.material.depthWrite,edges:mesh.children[0].visible}))};
+      return {pixels,near:viewer.camera.near,far:viewer.camera.far,materials:viewer.meshes.map((mesh:any)=>({color:mesh.userData.base.getHex(),opacity:mesh.material.opacity,depthWrite:mesh.material.depthWrite,edges:mesh.getObjectByName('solid-edges').visible}))};
     };
     const before=await capture();
     viewer.setPaths([{id:0,points:[[1000000,0,-1000000],[1000001,0,-1000000]]}],0,[0,1],()=>{});viewer.showPaths(true);
@@ -438,7 +438,7 @@ test('显示网格边线与实际原始表面边界一致', async ({page}) => {
     const key=(body:number,a:string,b:string)=>body+':'+[a,b].sort().join('|');
     const expected=new Set<string>();
     data.faces.forEach((face:number[],i:number)=>face.forEach((node,j)=>expected.add(key(data.body_ids[i],point(node),point(face[(j+1)%face.length])))));
-    viewer.showEdges(true);
+    viewer.setRenderMode('wireframe');
     const actual=new Set<string>();
     for(const mesh of viewer.meshes) {
       const lines=mesh.children[0], positions=lines.geometry.getAttribute('position');

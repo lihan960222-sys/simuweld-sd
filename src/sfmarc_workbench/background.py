@@ -14,7 +14,7 @@ from .geometry import body_volumes
 
 
 class BackgroundModel:
-    def __init__(self, data: bytes, filename: str, file_format: str):
+    def __init__(self, data: bytes, filename: str, file_format: str, progress=None):
         readers = {"inp": abaqus.read, "bdf": nastran.read, "nas": nastran.read,
                    "stp": step.read, "step": step.read}
         if file_format not in readers:
@@ -30,7 +30,11 @@ class BackgroundModel:
         with TemporaryDirectory(dir=scratch) as directory:
             path = Path(directory) / ("geometry." + file_format)
             path.write_bytes(data)
+            if progress:
+                progress("读取 STEP 几何" if file_format in ("stp", "step") else "读取网格文件")
             mesh = readers[file_format](path)
+        if progress:
+            progress("提取模型外表面")
         if file_format in ("bdf", "nas") and np.any(mesh.point_data.get("nastran:ref", 0)):
             raise ValueError("BDF 请导出全局坐标下的网格；当前读取器不转换 GRID 引用的局部坐标系")
         self.filename = filename
@@ -60,13 +64,19 @@ class BackgroundModel:
         if not self.faces:
             raise ValueError("模型没有可显示的表面")
         edge_faces = defaultdict(list)
+        if progress:
+            progress("整理模型表面", 0, len(self.faces), "个面")
         for index, face in enumerate(self.faces):
             for a, b in zip(face, face[1:] + face[:1]):
                 edge_faces[tuple(sorted((a, b)))].append(index)
+            if progress and ((index + 1) % 5000 == 0 or index + 1 == len(self.faces)):
+                progress("整理模型表面", index + 1, len(self.faces), "个面")
         rows, columns = [], []
         for faces in edge_faces.values():
             rows.extend([faces[0]] * (len(faces) - 1))
             columns.extend(faces[1:])
+        if progress:
+            progress("识别模型实体")
         graph = coo_matrix((np.ones(len(rows)), (rows, columns)), shape=(len(self.faces), len(self.faces))).tocsr()
         _, self.body_ids = connected_components(graph, directed=False)
         self.body_names = {int(body): f"实体 {int(body) + 1}" for body in np.unique(self.body_ids)}
@@ -79,5 +89,7 @@ class BackgroundModel:
                 triangle_faces.append(index)
         self.triangles = np.array(triangles, dtype=np.uint32)
         self.triangle_faces = np.array(triangle_faces, dtype=np.uint32)
+        if progress:
+            progress("计算实体体积")
         self.body_volumes = body_volumes(self.points, self.triangles, self.body_ids[self.triangle_faces])
         self.length_unit = "mm" if file_format in ("stp", "step") else None

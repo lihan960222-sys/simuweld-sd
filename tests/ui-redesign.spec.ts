@@ -3,9 +3,11 @@ import {test,expect} from '@playwright/test';
 test('各模块的图标居中，侧栏和视窗适应宽度',async({page})=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await expect(page.locator('#open-model')).toHaveText('上传模型');
   await page.locator('#open-model').click();await page.locator('#import-units').selectOption('mm');
   await page.locator('#file').setInputFiles('work/elemtype7_tension.dat');
   await expect(page.locator('#body-list .body-card')).not.toHaveCount(0);
+  await expect(page.locator('#open-model')).toHaveText('上传模型');
   await page.locator('#tool-welding').click();
   await page.locator('#weld-files').setInputFiles('work/weld-reference/nodes.csv');
   await expect(page.locator('#weld-source-info')).toContainText('295');
@@ -22,6 +24,11 @@ test('各模块的图标居中，侧栏和视窗适应宽度',async({page})=>{
     for(const module of ['生成焊路','面载荷','模型查看']) {
       await page.getByRole('button',{name:module,exact:true}).click();
       expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      const upload=await page.locator('#open-model').evaluate(button=>{
+        const rect=button.getBoundingClientRect(),icon=button.querySelector('svg')!.getBoundingClientRect(),label=button.querySelector('span')!.getBoundingClientRect();
+        return {width:rect.width,dx:Math.abs((icon.left+label.right-rect.left-rect.right)/2),dy:Math.abs((label.top+label.bottom-rect.top-rect.bottom)/2)};
+      });
+      expect(upload.width).toBeGreaterThan(100);expect(upload.dx).toBeLessThan(.75);expect(upload.dy).toBeLessThan(.75);
       const alignment=await page.locator('button.icon-button').evaluateAll(buttons=>buttons.flatMap(button=>{
         const svg=button.querySelector('svg'),rect=button.getBoundingClientRect();
         if(!svg || !rect.width || !rect.height || getComputedStyle(button).visibility==='hidden') return [];

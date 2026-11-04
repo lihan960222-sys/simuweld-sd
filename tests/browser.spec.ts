@@ -163,7 +163,7 @@ test('CSV 焊路按范围、顺序和停止时间导出脚本', async ({page}) =
   await page.getByRole('button',{name:'模型查看',exact:true}).click();
   await page.locator('#open-model').click();
   await page.locator('#import-units').selectOption('m');
-  await page.locator('#close-model-dialog').click();
+  await expect(page.locator('#model-dialog')).toBeHidden();
   await page.getByRole('button',{name:'生成焊路',exact:true}).click();
   await expect.poll(coloredPixels).toBeGreaterThan(before*0.9);
   await expect(page.locator('#weld-list .weld-card').last()).toContainText('4 s');
@@ -234,6 +234,73 @@ async function frameSum(page: Page) {
     resolve(pixels.reduce((sum,value)=>sum+value,0));
   })));
 }
+
+test('STEP 实体与边线保留透明表面，平面内部没有三角对角线',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await page.locator('#open-model').click();
+  await page.locator('#file').setInputFiles('work/edge-feature-check/box.stp');
+  await expect(page.locator('#body-list .body-card')).toHaveCount(1);
+  await page.locator('#projection').selectOption('orthographic');
+  await page.locator('[data-view=xy]').click();
+  const body=page.locator('#body-list .body-card').first();
+  await body.locator('summary').press('Enter');
+  await body.getByRole('checkbox',{name:/半透明/}).check();
+  const sample=()=>page.evaluate(()=>new Promise<number[]>(resolve=>requestAnimationFrame(()=>{
+    const canvas=document.querySelector('canvas')!,gl=canvas.getContext('webgl2')!;
+    const pixels=new Uint8Array(80*80*4);
+    gl.readPixels(Math.floor(gl.drawingBufferWidth/2)-40,Math.floor(gl.drawingBufferHeight/2)-40,80,80,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+    resolve(Array.from(pixels));
+  })));
+  const surface=await sample(),surfaceSum=await frameSum(page);
+  await page.locator('#render-mode').selectOption('solid-edges');
+  expect(await sample()).toEqual(surface);
+  expect(await frameSum(page)).not.toBe(surfaceSum);
+  await expect(body.getByRole('checkbox',{name:/半透明/})).toBeChecked();
+  await expect(page.locator('#render-mode option[value=wireframe]')).toBeDisabled();
+  await page.locator('#render-mode').selectOption('edges');
+  expect(await sample()).not.toEqual(surface);
+  expect(errors).toEqual([]);
+});
+
+test('四种显示入口按模型格式启用原始网格',async({page})=>{
+  await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await expect(page.locator('#render-mode option')).toHaveText(['实体','网格','边线','实体与边线']);
+  for(const file of ['work/elemtype7_tension.dat','work/geometry-tests/two_blocks.inp','work/geometry-tests/two_blocks.bdf','work/edge-feature-check/box.stp']) {
+    await page.locator('#open-model').click();
+    await page.locator('#import-units').selectOption('mm');
+    await page.locator('#file').setInputFiles(file);
+    await expect(page.locator('#model-info')).toContainText(file.split('/').pop()!);
+    await expect(page.locator('#busy')).toBeHidden();
+    const grid=page.locator('#render-mode option[value=wireframe]');
+    if(file.endsWith('.stp')) {
+      await expect(grid).toBeDisabled();
+      await expect(page.locator('#render-mode')).toHaveValue('edges');
+    } else {
+      await expect(grid).toBeEnabled();
+      await page.locator('#render-mode').selectOption('wireframe');
+    }
+  }
+});
+
+test('网格模式保持不透明，实体模式恢复透明度设置',async({page})=>{
+  await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await page.locator('#open-model').click();await page.locator('#import-units').selectOption('mm');
+  await page.locator('#file').setInputFiles('work/elemtype7_tension.dat');
+  await expect(page.locator('#body-list .body-card')).toHaveCount(1);
+  await page.locator('[data-view=xy]').click();
+  await page.locator('#render-mode').selectOption('wireframe');
+  const opaque=await frameSum(page),body=page.locator('#body-list .body-card').first();
+  await body.locator('summary').press('Enter');
+  await body.getByRole('checkbox',{name:/半透明/}).check();
+  expect(await frameSum(page)).toBe(opaque);
+  await body.getByRole('slider',{name:/透明度/}).fill('80');
+  expect(await frameSum(page)).toBe(opaque);
+  await page.locator('#render-mode').selectOption('solid');
+  const transparent=await frameSum(page);
+  await body.getByRole('checkbox',{name:/半透明/}).uncheck();
+  expect(await frameSum(page)).not.toBe(transparent);
+});
 
 test('模型与 CSV 在模块切换后保留，焊路分别使用不同热源',async({page})=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
@@ -323,7 +390,7 @@ test('真实模型导入、选面、手动方向、载荷保存和下载', async
   await expect(modelTool).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('aside[data-tool=surface-load]')).toBeHidden();
   await expect(page.locator('.selection-bar')).toBeHidden();
-  await expect(page.locator('#empty h1')).toHaveText('打开模型');
+  await expect(page.locator('#empty h1')).toHaveText('Empowering Welding Simulation');
   await expect(page.locator('.eyebrow, .help, .local, #unit-confirm, #solver-info, #material-info')).toHaveCount(0);
   await expect(page.locator('footer')).toHaveText('copyright LH');
   await expect(page.locator('.left > section:not([hidden]) details.panel-group')).toHaveCount(1);

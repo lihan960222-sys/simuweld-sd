@@ -40,7 +40,8 @@ class LoadCase:
 
 
 class Deck:
-    def __init__(self, files: dict[str, bytes], root: str):
+    def __init__(self, files: dict[str, bytes], root: str, progress=None):
+        self._progress = progress
         self.files = {safe_path(k): v for k, v in files.items()}
         self.root = safe_path(root)
         if self.root not in self.files:
@@ -49,6 +50,9 @@ class Deck:
         self.used_files = set()
         self.lines = []
         self._expand(self.root, ())
+        self._progress = None
+        if progress:
+            progress("解析网格与求解设置")
         text = [line.text for line in self.lines]
         self.extended = any(re.match(r"^extended\s*$", s, re.I) for s in text)
         self.iw = 10 if self.extended else 5
@@ -115,10 +119,12 @@ class Deck:
         if path in ancestors or len(ancestors) >= 10:
             raise ValueError(f"INCLUDE 循环引用或超过 10 层：{path}")
         if path not in self.files:
-            raise ValueError(f"缺少 INCLUDE 文件：{path}；请使用选择模型目录")
+            raise ValueError(f"缺少 INCLUDE 文件：{path}；请导入包含完整数据的 DAT 文件")
         if path in self.used_files:
             raise ValueError(f"同一个 INCLUDE 文件被多次引用：{path}")
         self.used_files.add(path)
+        if self._progress:
+            self._progress("读取 DAT 文本 · " + path, 0, len(self.source_lines[path]), "行")
         for number, raw in enumerate(self.source_lines[path]):
             line = SourceLine(path, number, raw)
             target = _marc._include_target(line.text)
@@ -128,3 +134,5 @@ class Deck:
                 target = safe_path(target)
                 child = safe_path((PurePosixPath(path).parent / target).as_posix())
                 self._expand(child, (*ancestors, path))
+            if self._progress and ((number + 1) % 2000 == 0 or number + 1 == len(self.source_lines[path])):
+                self._progress("读取 DAT 文本 · " + path, number + 1, len(self.source_lines[path]), "行")
