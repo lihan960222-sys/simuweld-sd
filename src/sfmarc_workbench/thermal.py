@@ -2,8 +2,10 @@ import ast
 import csv
 import math
 import json
+import sys
 from hashlib import sha256
 from pathlib import Path
+from tempfile import TemporaryFile
 import xml.etree.ElementTree as ET
 
 from meshioplusplus.marc import _marc
@@ -11,7 +13,7 @@ import numpy as np
 
 from .geometry import SurfaceModel
 from .thermal_deck import read_weld_paths
-from .sampling import ComponentSurface, sampling_parameters, select_nodes
+from .sampling import sampling_parameters, select_nodes
 
 
 def simplify_curve(times, values, tolerance):
@@ -34,6 +36,37 @@ def simplify_curve(times, values, tolerance):
     if error > tolerance + 1e-8 or peak not in keep:
         raise ValueError("温度曲线简化检查未通过")
     return indices, error
+
+
+def aligned_average(times, values, arrivals, window=None):
+    times, values, arrivals = np.asarray(times), np.asarray(values), np.asarray(arrivals)
+    if (times.ndim != 1 or arrivals.ndim != 1 or not len(arrivals) or len(times) < 3
+            or values.shape != (len(times), len(arrivals))
+            or not np.isfinite(times).all() or not np.isfinite(values).all()
+            or not np.isfinite(arrivals).all() or np.any(np.diff(times) <= 0)):
+        raise ValueError("节点温度、经过时刻或时间顺序无效")
+    first, last = float(np.max(times[0] - arrivals)), float(np.min(times[-1] - arrivals))
+    if window is not None:
+        first, last = max(first, window[0]), min(last, window[1])
+    if last <= first:
+        raise ValueError("节点温度没有共同的有效相对时间范围，无法计算分段平均曲线")
+    # 累加线性插值的斜率变化，保留全部折点，共同范围之外不进行外推。
+    knots, changes = [np.asarray([first, last])], [np.zeros(2)]
+    initial, slope = 0., 0.
+    for index, arrival in enumerate(arrivals):
+        temperatures = values[:, index]
+        slopes = np.diff(temperatures) / np.diff(times) / len(arrivals)
+        shifted = times[1:-1] - arrival
+        included = (shifted > first) & (shifted < last)
+        knots.append(shifted[included])
+        changes.append(np.diff(slopes)[included])
+        initial += np.interp(first + arrival, times, temperatures) / len(arrivals)
+        interval = min(max(np.searchsorted(times, first + arrival, side="right") - 1, 0), len(slopes) - 1)
+        slope += slopes[interval]
+    relative, inverse = np.unique(np.concatenate(knots), return_inverse=True)
+    delta = np.bincount(inverse, weights=np.concatenate(changes), minlength=len(relative))
+    mean = np.r_[initial, initial + np.cumsum((slope + np.cumsum(delta))[:-1] * np.diff(relative))]
+    return relative, mean
 
 
 def material_temperature(data):
@@ -74,30 +107,55 @@ class ThermalConversion:
                 self.components[name[6:-6]] = ids
         if not self.components:
             raise ValueError("DAT 中没有可识别的 Simufact 组件节点集（T_cpt_…_n_set）")
-        self.surfaces = {name: ComponentSurface(model, self.points, [self.node_index[node] for node in ids])
-                         for name, ids in self.components.items()}
+        self.exported = False
+        self.temperatures = None
+        self._temperature_file = None
+        self.summary = None
+        self.selected = {}
         self.resample(sampling)
 
     def resample(self, sampling=None):
-        self.exported = False
-        self.temperatures = None
-        self.summary = None
         parameters = sampling_parameters(self.plan["paths"], sampling)
         paths = [dict(path) for path in self.plan["paths"]]
         selected, missing = select_nodes(self.model, self.points, self.node_index, self.components,
-                                         paths, parameters, self.surfaces)
+                                         paths, parameters)
+        if self.selected.keys() != selected.keys():
+            self.exported = False
+            self.clear_temperatures()
         self.plan["paths"] = paths
         self.sampling, self.selected, self.missing = parameters, selected, missing
         self.sampling_id = sha256(json.dumps({"parameters": parameters, "nodes": sorted(selected),
                                               "source": self.model.deck.digest}, sort_keys=True).encode()).hexdigest()
+        if self.summary is not None:
+            self.refresh_summary()
         return self.metadata()
+
+    def clear_temperatures(self):
+        if self.temperatures is not None:
+            self.temperatures[2]._mmap.close()
+        self.temperatures = None
+        self.summary = None
+        if self._temperature_file is not None:
+            self._temperature_file.close()
+        self._temperature_file = None
+
+    def close(self):
+        self.clear_temperatures()
+
+    def sampling_ready(self):
+        return bool(self.selected) and not self.missing and all(
+            segment["samples"] for path in self.plan["paths"] for segment in path["segments"])
 
     def metadata(self):
         return {"source_process": self.plan["source_process"], "source_sha256": self.model.deck.digest,
                 "sampling": self.sampling, "sampling_id": self.sampling_id, "missing": self.missing,
                 "node_count": len(self.selected), "missing_count": len(self.missing),
-                "angle_definition": "相邻线段的方向变化角：直线为 0°，直角转弯为 90°。默认阈值取大于 0.01° 的转角中位数的一半，并限制在 0.1° 至 45°；达到阈值的路径顶点补充采样。",
-                "surface_definition": "使用组件几何的厚度方向投影到真实外表面；厚度方向绝对值最大的坐标分量朝正方向作为上表面方向。",
+                "missing_length_mm": sum(item["length_mm"] for item in self.missing),
+                "segment_count": sum(len(path["segments"]) for path in self.plan["paths"]),
+                "exported": self.exported, "temperatures": self.summary,
+                "can_export": self.sampling_ready(),
+                "can_create": self.sampling_ready() and self.summary is not None and all(
+                    row["complete"] for row in self.summary["coverage"]),
                 "room_c": self.plan.get("room_c"), "end_s": self.plan["end_s"],
                 "paths": self.plan["paths"], "nodes": [{**node, "paths": sorted(node["paths"])} for node in self.selected.values()]}
 
@@ -108,8 +166,8 @@ class ThermalConversion:
         return code.encode("utf-8")
 
     def export_script(self):
-        if not self.selected:
-            raise ValueError("当前采样没有匹配真实节点，请调整采样参数")
+        if not self.sampling_ready():
+            raise ValueError("存在未覆盖的焊线或没有采样节点的分段，请调整搜索半径或分段设置")
         groups = [{"name": name, "node_count": len(ids),
                    "node_ids": sorted(node for component, node in self.selected if component == name)}
                   for name, ids in self.components.items()]
@@ -123,30 +181,38 @@ class ThermalConversion:
     def import_temperatures(self, stream):
         if not self.exported:
             raise ValueError("请生成当前 DAT 的温度导出脚本")
-        self.temperatures = None
-        self.summary = None
+        self.clear_temperatures()
+        try:
+            self.read_temperatures(stream)
+            self.refresh_summary()
+            return self.summary
+        finally:
+            if self.summary is None or "coverage" not in self.summary:
+                self.clear_temperatures()
+
+    def read_temperatures(self, stream):
         reader = csv.DictReader(stream)
         required = {"Increment", "Time_s", "Component", "SolverNodeID", "NodeID", "Temperature_C"}
         if not required.issubset(reader.fieldnames or []):
             raise ValueError("温度 CSV 需要包含 Increment、Time_s、Component、SolverNodeID、NodeID、Temperature_C")
-        records, times, increments, rows = [], [], [], []
+        times, increments, rows = [], [], []
         cohort = None
         current_increment = None
         current_time = None
         seen = set()
         components = {}
         digest_seen = False
-        representative_ids = {path["representative_node"] for path in self.plan["paths"]}
-        if None in representative_ids:
-            raise ValueError("部分焊路没有匹配代表节点，请调整采样参数并重新导出温度数据")
         valid_components = {name: set(ids) for name, ids in self.components.items()}
+        keys = sorted(self.selected)
+        directory = (Path(sys._sd_root) if hasattr(sys, "_sd_root") else Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
+                     else Path(__file__).resolve().parents[2]) / "work" / "thermal"
+        directory.mkdir(parents=True, exist_ok=True)
+        self._temperature_file = TemporaryFile(mode="w+b", dir=directory)
 
         def finish():
             nonlocal cohort
             if cohort is None:
                 cohort = set(seen)
-                if not representative_ids.issubset({key[1] for key in cohort}):
-                    raise ValueError("温度 CSV 缺少当前 DAT 自动选择的代表节点，请运行当前导出脚本")
                 for component in {key[0] for key in cohort}:
                     ids = {key[1] for key in cohort if key[0] == component}
                     candidates = [name for name, expected in valid_components.items() if ids.issubset(expected)]
@@ -165,16 +231,15 @@ class ThermalConversion:
                 raise ValueError("温度 CSV 的时间必须递增")
             if increments and current_increment <= increments[-1]:
                 raise ValueError("温度 CSV 的增量编号必须严格递增")
-            row_values = {node: temperature for (_, node), temperature in rows}
-            if len(row_values) != len(rows):
-                raise ValueError("多个 CSV 组件使用了相同 SolverNodeID，无法唯一关联当前 DAT")
-            representative_values = {node: row_values[node] for node in representative_ids}
+            row_values = {(components[name], node): temperature for (name, node), temperature in rows}
+            values = np.asarray([row_values[key] for key in keys], dtype=np.float64)
             if times and current_time == times[-1]:
-                times[-1], increments[-1], records[-1] = current_time, current_increment, representative_values
+                times[-1], increments[-1] = current_time, current_increment
+                self._temperature_file.seek(-values.nbytes, 1)
             else:
                 times.append(current_time)
                 increments.append(current_increment)
-                records.append(representative_values)
+            self._temperature_file.write(values.tobytes())
 
         row_count = 0
         for row_count, row in enumerate(reader, 1):
@@ -208,58 +273,90 @@ class ThermalConversion:
             raise ValueError("温度 CSV 缺少当前 DAT 的文件摘要")
         if len(times) < 3 or times[0] > 1e-6:
             raise ValueError("温度数据需要包含初始时刻以及加热、冷却期间的已保存增量")
-        ids = sorted(representative_ids)
-        values = np.array([[record[node] for node in ids] for record in records])
+        self._temperature_file.flush()
+        values = np.memmap(self._temperature_file, dtype=np.float64, mode="r", shape=(len(times), len(keys)))
         times = np.asarray(times)
-        self.temperatures = times, ids, values
-        coverage = [{"id": path["id"], "complete": bool(times[-1] >= path["cooling_end_s"] - 1e-6),
-                     "weld_complete": bool(times[-1] >= path["end_s"] - 1e-6)} for path in self.plan["paths"]]
+        self.temperatures = times, keys, values
         self.summary = {"rows": row_count, "increments": len(times), "nodes": len(cohort), "end_s": float(times[-1]),
-                        "initial_c": float(values[0].mean()), "coverage": coverage,
-                        "digest_verified": digest_seen, "curves": self.curves(tolerance=5, normalized=False)}
+                        "initial_c": float(values[0].mean()), "digest_verified": digest_seen}
         return self.summary
+
+    def refresh_summary(self):
+        times, _, _ = self.temperatures
+        coverage = []
+        curves = self.curves(tolerance=5, normalized=False)
+        by_segment = {(curve["path_id"], curve["index"]): curve for curve in curves}
+        for path in self.plan["paths"]:
+            for segment in path["segments"]:
+                curve = by_segment.get((path["id"], segment["index"]))
+                reason = ("本分段没有采样节点" if not segment["samples"] else
+                          "温度记录未覆盖本条焊路及其冷却过程" if times[-1] < path["cooling_end_s"] - 1e-6 else
+                          curve["reason"] if curve else "温度记录没有共同的有效时间范围")
+                coverage.append({"path_id": path["id"], "index": segment["index"], "label": segment["label"],
+                                 "complete": not reason, "weld_complete": bool(times[-1] >= segment["end_s"] - 1e-6),
+                                 "reason": reason})
+        self.summary.update(coverage=coverage, curves=curves,
+                            can_create=self.sampling_ready() and all(row["complete"] for row in coverage))
 
     def curves(self, room=None, melting=None, tolerance=5, normalized=True):
         if self.temperatures is None:
             raise ValueError("请导入温度数据")
-        times, ids, values = self.temperatures
+        times, keys, values = self.temperatures
+        columns = {key: index for index, key in enumerate(keys)}
         result = []
         for path in self.plan["paths"]:
-            mask = np.flatnonzero(times <= path["cooling_end_s"] + 1e-6)
-            end = int(mask[-1])
-            source_times = times[:end + 1]
-            temperatures = values[:end + 1, ids.index(path["representative_node"])]
-            # 保留本条焊路之前的真实预热记录，时间以热源经过采样节点为零点。
-            current = np.flatnonzero((source_times >= path["start_s"] - 1e-6) & (source_times <= path["cooling_end_s"] + 1e-6))
-            if len(current) < 3 or source_times[-1] <= path["arrival_s"]:
-                raise ValueError(f"焊路 {path['id']} 的代表节点缺少加热后的温度记录")
-            peak = int(current[np.argmax(temperatures[current])])
-            if peak >= end or temperatures[peak] <= temperatures[current[0]] + 1:
-                raise ValueError(f"焊路 {path['id']} 的代表节点缺少完整峰值和冷却记录")
-            indices, error = simplify_curve(source_times, temperatures, tolerance)
-            normalized_values = (temperatures[indices] - room) / (melting - room) if normalized else temperatures[indices]
-            if normalized and (np.any(normalized_values < -1e-6) or np.any(normalized_values > 2)):
-                raise ValueError(f"焊路 {path['id']} 的归一化温度超出 [0, 2]，请核对温度基准与材料")
-            if normalized:
-                normalized_values = np.maximum(normalized_values, 0)
-            result.append({"id": path["id"], "node_id": path["representative_node"], "peak_c": float(temperatures[peak]),
-                           "peak_time_s": float(source_times[peak]), "error_c": error,
-                           "curve": np.c_[source_times[indices] - path["arrival_s"], normalized_values].tolist()})
+            first, last = path["start_s"], min(times[-1], path["cooling_end_s"])
+            if last <= first:
+                continue
+            source_times = np.unique(np.r_[first, times[(times > first) & (times < last)], last])
+            if len(source_times) < 3:
+                continue
+            for segment in path["segments"]:
+                samples = segment["samples"]
+                if not samples:
+                    continue
+                arrivals = np.asarray([sample["arrival_s"] for sample in samples])
+                if source_times[-1] - arrivals.max() <= source_times[0] - arrivals.min():
+                    continue
+                measured = np.column_stack([np.interp(source_times, times, values[:, columns[
+                    sample["component"], sample["node_id"]]]) for sample in samples])
+                half_duration = (segment["end_s"] - segment["start_s"]) / 2
+                first_relative = max(float(source_times[0] - arrivals.min()), -half_duration)
+                last_relative = min(float(source_times[-1] - arrivals.max()), half_duration)
+                if last_relative <= first_relative:
+                    continue
+                relative, mean = aligned_average(source_times, measured, arrivals, (-half_duration, half_duration))
+                peak = int(np.argmax(mean))
+                reason = ("分段时段内未包含升温、峰值和降温趋势，请增加分段长度或减少段数" if peak == 0 or peak == len(mean) - 1
+                          or mean[peak] <= mean[0] + 1 or relative[-1] <= 0 else "")
+                indices, error = simplify_curve(relative, mean, tolerance)
+                temperatures = (mean[indices] - room) / (melting - room) if normalized else mean[indices]
+                if normalized and (np.any(temperatures < -1e-6) or np.any(temperatures > 2)):
+                    raise ValueError(f"{segment['label']} 的归一化温度超出 [0, 2]，请核对温度基准与材料")
+                result.append({"path_id": path["id"], "index": segment["index"], "label": segment["label"],
+                               "node_count": len(samples), "peak_c": float(mean[peak]),
+                               "peak_time_s": float(relative[peak]), "error_c": error, "reason": reason,
+                               "curve": np.c_[relative[indices], np.maximum(temperatures, 0) if normalized else temperatures].tolist()})
         return result
 
-    def create_script(self, room, melting, maximum, tolerance, allow_partial):
-        if not all(math.isfinite(value) for value in (room, melting, maximum, tolerance)) or not room < melting or maximum <= 0 or tolerance <= 0:
-            raise ValueError("请核对初始温度、熔化温度、最大分段长度和曲线误差")
+    def create_script(self, room, melting, tolerance=5):
+        if not all(math.isfinite(value) for value in (room, melting, tolerance)) or not room < melting or tolerance <= 0:
+            raise ValueError("请核对初始温度、熔化温度和曲线误差")
         if self.summary is None:
             raise ValueError("请导入温度数据")
-        incomplete = [str(item["id"]) for item in self.summary["coverage"] if not item["complete"]]
-        if incomplete and not allow_partial:
-            raise ValueError("温度记录未覆盖全部焊程或冷却：" + "、".join(incomplete) + "。请补充数据，或明确选择仅使用已有代表曲线")
+        if not self.sampling_ready():
+            raise ValueError("存在未覆盖的焊线或没有采样节点的分段，无法生成 TC")
+        incomplete = [item["label"] + "：" + item["reason"] for item in self.summary["coverage"] if not item["complete"]]
+        if incomplete:
+            raise ValueError("分段温度数据不完整：" + "；".join(incomplete[:6]))
         curves = self.curves(room, melting, tolerance)
-        paths = [{**path, "segment_count": math.ceil(path["length_mm"] / maximum), "curve": curve["curve"]}
-                 for path, curve in zip(self.plan["paths"], curves)]
+        by_segment = {(curve["path_id"], curve["index"]): curve for curve in curves}
+        paths = [{**path, "segments": [{**segment,
+                 "speed_mm_s": segment["length_mm"] / (segment["end_s"] - segment["start_s"]),
+                 "curve": by_segment[path["id"], segment["index"]]["curve"]}
+                 for segment in path["segments"]]} for path in self.plan["paths"]]
         config = {"source_process": self.plan["source_process"], "target_process": self.plan["source_process"] + "_TC",
                   "source_sha256": self.model.deck.digest, "paths": paths, "room_c": room, "melting_c": melting,
                   "heat_source_xml": Path(__file__).with_name("templates").joinpath("thermal_cycle_source.xml").read_text(encoding="utf-8"),
-                  "coverage_note": ("温度数据未覆盖全部焊程或冷却；仅使用已记录的代表节点曲线，没有补充温度数据。" if incomplete else "温度数据覆盖全部焊程与计划冷却。")}
+                  "coverage_note": "各段使用全部成员节点的温度，按照热源经过时刻平移后等权平均。"}
         return self.script("create", config)

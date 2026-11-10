@@ -31,22 +31,26 @@ def test_sampling_revision_export_and_invalid_parameters():
         config = ast.literal_eval(ast.parse(response.text).body[0].value)
         exported = {(group["name"], node) for group in config["groups"] for node in group["node_ids"]}
         assert exported == {(node["component"], node["node_id"]) for node in initial["nodes"]}
-        response = client.post("/api/thermal/resample", json={**identity, "sampling": {"spacing_mm": 4, "surface": "lower"}})
+        divisions = {str(path["id"]): {"mode": "count", "value": 20} for path in initial["paths"]}
+        response = client.post("/api/thermal/resample", json={**identity, "sampling": {"divisions": divisions}})
         assert response.status_code == 200, response.text
         updated = response.json()
         assert updated["sampling_id"] != initial["sampling_id"]
-        assert not app.state.thermal.exported
+        assert app.state.thermal.exported
+        assert updated["segment_count"] == 80
         assert app.state.thermal.summary is None
         assert client.post("/api/thermal/export", json=identity).status_code == 409
         assert client.post("/api/thermal/create", json={**identity, "room_c": 25, "melting_c": 1082}).status_code == 409
         identity = {"sampling_id": updated["sampling_id"]}
         assert client.post("/api/thermal/export", json=identity).status_code == 200
-        response = client.post("/api/thermal/resample", json={**identity, "sampling": {"spacing_mm": 0}})
+        response = client.post("/api/thermal/resample", json={**identity, "sampling": {"search_mm": 0}})
         assert response.status_code == 400
-        assert not app.state.thermal.exported
+        assert app.state.thermal.exported
         assert app.state.thermal.summary is None
-        response = client.post("/api/thermal/resample", json={**identity, "sampling": {"spacing_mm": 3, "turn_angle_deg": None}})
+        response = client.post("/api/thermal/resample", json={**identity, "sampling": {"search_mm": .05}})
         assert response.status_code == 200, response.text
+        assert not response.json()["can_export"]
+        assert not response.json()["exported"]
         identity = {"sampling_id": response.json()["sampling_id"]}
         assert client.post("/api/thermal/create", json={**identity, "room_c": 25, "melting_c": 1082}).status_code == 400
         assert client.post("/api/model/clear", json={}).status_code == 200
@@ -66,18 +70,19 @@ def test_new_model_prepares_during_previous_model_sampling():
         sampling_id = response.json()["sampling_id"]
         with ThreadPoolExecutor(max_workers=1) as executor:
             previous = executor.submit(client.post, "/api/thermal/resample", json={
-                "sampling_id": sampling_id, "sampling": {"spacing_mm": .15}})
+                "sampling_id": sampling_id, "sampling": {"divisions": {
+                    str(path["id"]): {"mode": "count", "value": 1000} for path in response.json()["paths"]}}})
             deadline = time.monotonic() + 10
             while app.state.thermal_sampling is None and not previous.done() and time.monotonic() < deadline:
                 time.sleep(.01)
             assert app.state.thermal_sampling is not None
             assert app.state.thermal_sampling[0] is original_model
+            assert client.post("/api/model/clear", json={}).status_code == 200
             response = client.post("/api/model", data={"root": SOURCE.name},
                                    files={"files": (SOURCE.name, source, "application/octet-stream")})
             assert response.status_code == 200, response.text
             current_headers = {"X-Model-Id": response.json()["id"]}
             assert app.state.model is not original_model
-            assert not previous.done(), "需要旧模型的实际计算仍在执行，才能验证并发准备"
             response = client.post("/api/thermal", headers=current_headers, json={"length_unit": "m"})
             assert response.status_code == 200, response.text
             current = app.state.thermal

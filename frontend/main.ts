@@ -3,8 +3,10 @@ import './import.css';
 import { Viewer, type MeshData, type RenderMode } from './viewer';
 import { WeldingTool } from './welding';
 import { ThermalTool } from './thermal';
+import { LocalTrialTool } from './localTrial';
 import { setupSidebarResize } from './sidebarResize';
-import { iconButton, setIcon, makeCollapsible } from './ui';
+import { setIcon, makeCollapsible } from './ui';
+import { setupFaceLoad, faceLoadPanel, faceLoadSelection } from './faceLoad';
 import './design.css';
 
 interface ModelInfo {
@@ -12,11 +14,6 @@ interface ModelInfo {
   id: string; filename: string; nodes: number; elements: number; faces: number;
   bodies: {id: number; name: string; volume: number | null}[]; cases: {id: number; name: string; initial: boolean}[];
 }
-interface Load {
-  name: string; faces: number[]; magnitude: number; mode: string; direction: number[]; cases: number[];
-  length_unit: string; force_unit: string; pressure_unit: string;
-}
-interface Preview { area: number; force: number[]; face_count: number; face_ids: number[]; centers: number[][]; directions: number[][]; area_unit: string; force_unit: string; }
 interface WorkspaceTool { id: string; label: string; activate?: ()=>void; pick?: (face: number)=>void; }
 
 const planeIcon = (plane: string) => `<svg class="plane-axis" viewBox="0 0 36 36" aria-hidden="true" focusable="false"><g class="axis-${plane[0]}"><path d="M10 26h14m-3-3 3 3-3 3"/><text x="26" y="32">${plane[0].toUpperCase()}</text></g><g class="axis-${plane[1]}"><path d="M10 26V12m-3 3 3-3 3 3"/><text x="7" y="9">${plane[1].toUpperCase()}</text></g><circle cx="10" cy="26" r="1.5" fill="currentColor"/></svg>`;
@@ -35,23 +32,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="workspace"><div class="view-tools"><button id="fit" aria-label="回到中心" title="回到中心"><svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path class="fit-corners" d="M11 4H4v7m21-7h7v7M4 25v7h7m21-7v7h-7"/><path class="fit-model" d="M18 11v14m-7-7h14"/><circle class="fit-model" cx="18" cy="18" r="4"/></svg></button><button data-view="xy" aria-label="XY 平面" title="XY 平面">${planeIcon('xy')}</button><button data-view="xz" aria-label="XZ 平面" title="XZ 平面">${planeIcon('xz')}</button><button data-view="yz" aria-label="YZ 平面" title="YZ 平面">${planeIcon('yz')}</button><select id="projection" aria-label="投影方式"><option value="perspective">透视</option><option value="orthographic">正交</option></select><select id="render-mode" aria-label="渲染模式"><option value="solid">实体</option><option value="wireframe" disabled>网格</option><option value="edges">边线</option><option value="solid-edges">实体与边线</option></select><button id="explode" aria-label="爆炸图" title="爆炸图" aria-expanded="false" disabled>爆炸图</button><label id="explosion-control" hidden>展开程度<input id="explosion" aria-label="爆炸图展开程度" type="range" min="0" max="100" value="0"><output id="explosion-value">0%</output></label></div>
       <div id="viewport"></div><div id="empty"><img class="empty-shape" src="/icon.svg" alt="SIMUWELD SD" width="64" height="64"><h1>Empowering Welding Simulation</h1></div>
       <div id="busy" hidden><span class="spinner"></span><div class="busy-content"><span id="busy-text" role="status" aria-live="polite">正在读取模型…</span><progress id="import-progress" aria-label="模型读取进度" hidden></progress></div></div>
-      <div class="selection-bar" data-tool="surface-load" hidden><div><strong id="selected-count">0</strong><span>已选面</span></div><div><strong id="area-info">—</strong><span>表面积</span></div><button id="clear">清空选择</button></div>
+      ${faceLoadSelection}
       <div id="message" role="status" hidden></div>
     </div>
     <div id="resize-right" class="sidebar-resizer" role="separator" aria-label="调整右侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
-    <aside class="right" data-tool="surface-load" aria-label="面载荷参数" hidden>
-      <div class="tool-heading"><h1>面载荷</h1><p class="hint">选择表面，设置压力与方向。</p></div>
-      <section><h2>按夹角连续选择</h2><label>相邻面最大夹角 <span id="angle-value">20°</span><input id="angle" type="range" min="0" max="90" step="1" value="20"></label><p class="hint">从点击的面沿相邻表面扩展。</p><select id="selection-mode" aria-label="选择方式"><option value="replace">替换当前选择</option><option value="add">增加选择</option><option value="remove">移除选择</option></select></section>
-      <section><h2 id="load-heading">设置面载荷</h2><label>名称<input id="load-name" value="载荷 1" maxlength="80"></label>
-        <div class="input-row"><label>大小<input id="magnitude" type="number" min="0" step="any" value="1"></label><label>压力单位<select id="pressure-unit"><option>MPa</option><option>kPa</option><option>Pa</option></select></label></div>
-        <label>方向<select id="mode"><option value="inward">沿表面法向 · 向内</option><option value="outward">沿表面法向 · 向外</option><option value="manual">手动方向 · 全局坐标</option></select></label>
-        <div id="direction" class="input-row" hidden><label>X<input id="dx" type="number" step="any" value="0"></label><label>Y<input id="dy" type="number" step="any" value="0"></label><label>Z<input id="dz" type="number" step="any" value="-1"></label></div>
-        <label>生效阶段<select id="case-mode"><option value="all">全部计算阶段</option><option value="custom">指定阶段</option></select></label>
-        <div id="case-list" hidden></div>
-        <div id="force-info" class="force-info">选面后显示合力</div><button id="save-load" class="primary full">保存载荷</button>
-      </section>
-      <section><div class="section-title"><h2>载荷</h2><button id="show-all-loads" disabled aria-pressed="false"></button><span id="load-count" class="badge">0</span></div><div id="load-list"></div><div id="combined" hidden><label>阶段合力<select id="combined-case"></select></label><p id="combined-force"></p></div></section>
-    </aside>
+    ${faceLoadPanel}
   </main><footer>copyright LH</footer>
   <input id="file" type="file" accept=".dat,.inp,.bdf,.nas,.stp,.step" hidden />`;
 
@@ -62,18 +47,10 @@ const number = (id: string) => Number(input(id).value);
 const format = (value: number) => new Intl.NumberFormat('zh-CN', {maximumSignificantDigits: 5}).format(value);
 const token = new URLSearchParams(location.hash.slice(1)).get('token') || '';
 let info: ModelInfo | null = null;
-let selected: number[] = [];
-let lastSeed: number | null = null;
-let baseSelection: number[] = [];
 let mesh: MeshData | null = null;
 let busy = false;
-let editing: number | null = null;
 let files: File[] = [];
-const loads: {spec: Load; result: Preview}[] = [];
-const displayedLoads=new Set<number>();
 let activeTool: WorkspaceTool;
-let currentPreview: Preview | null = null;
-let previewGeneration=0;
 let modelLengthUnit='m';
 const modelScale=()=>modelLengthUnit==='m'?1000:1;
 let importProgressActive=false;
@@ -156,12 +133,14 @@ async function run(text: string, action: ()=>Promise<void>, showOverlay=true) {
 }
 
 const viewer = new Viewer(get('viewport'), face => activeTool.pick?.(face));
+const faceLoad = setupFaceLoad(viewer,{api,run,message,info:()=>info,unit:()=>modelLengthUnit,busy:()=>busy,active:()=>activeTool?.id==='surface-load',changed:updateExport});
 const welding = new WeldingTool(viewer, {api,run,message,unit:()=>'mm',hasModel:()=>!!info,changed:()=>{
   window.addEventListener('beforeunload',confirmLeave);
   get('empty').hidden=!!info || welding.hasPaths;
   updateExport();
 }});
 const thermal = new ThermalTool(viewer,{api,run,message,unit:()=>modelLengthUnit,changed:()=>window.addEventListener('beforeunload',confirmLeave)});
+const localTrial = new LocalTrialTool(viewer,{api,run,message,unit:()=>modelLengthUnit,changed:()=>window.addEventListener('beforeunload',confirmLeave)});
 makeCollapsible();
 function setModelUploadButton(replace=false) {
   const button=get('open-model');
@@ -171,15 +150,13 @@ function setModelUploadButton(replace=false) {
 }
 setModelUploadButton();setIcon(get('model-info-button'),'info','模型信息');
 setIcon(get('import-settings'),'settings','读取设置');
-setIcon(get('save-load'),'save','保存载荷');setIcon(get('clear'),'close','清空选择');
-setIcon(get('show-all-loads'),'all','显示全部载荷');setIcon(get('explode'),'explode','爆炸图');
+setIcon(get('explode'),'explode','爆炸图');
 setIcon(get('fit'),'focus','回到中心');
 const workspaceTools: WorkspaceTool[] = [
   {id:'model', label:'模型查看'},
-  {id:'surface-load', label:'面载荷', activate:()=>{if(displayedLoads.size) drawSavedLoads();else {viewer.highlight(selected); drawPreview();}}, pick:face=>{
-    void run('正在选择表面…',async()=>{baseSelection=[...selected];lastSeed=face;await pick();},false);
-  }},
   {id:'welding', label:'生成焊路'},
+  {id:'surface-load', label:'面载荷', activate:faceLoad.activate, pick:faceLoad.pick},
+  {id:'local-trial', label:'局部试算'},
   {id:'thermal-cycle', label:'转换至热循环模式'},
 ];
 for (const tool of workspaceTools) {
@@ -190,123 +167,25 @@ function activateTool(tool: WorkspaceTool) {
   if(busy || activeTool===tool) return;
   if(tool.id==='surface-load' && info?.supports_loads===false) {message('面载荷需要导入 Marc DAT 模型。');return;}
   activeTool=tool;
-  if(tool.id==='welding' || tool.id==='thermal-cycle') resetExplosion();
-  get<HTMLButtonElement>('explode').disabled=!info || tool.id==='welding' || tool.id==='thermal-cycle';
+  if(tool.id==='welding' || tool.id==='thermal-cycle' || tool.id==='local-trial') resetExplosion();
+  get<HTMLButtonElement>('explode').disabled=!info || tool.id==='welding' || tool.id==='thermal-cycle' || tool.id==='local-trial';
   document.querySelectorAll<HTMLElement>('[data-tool]').forEach(panel=>panel.hidden=panel.dataset.tool!==tool.id);
   document.querySelector('main')!.classList.toggle('has-tool-panel',!!document.querySelector('aside.right:not([hidden])'));
   workspaceTools.forEach(item=>get('tool-'+item.id).setAttribute('aria-pressed',String(item===tool)));
-  viewer.highlight([]); viewer.clearArrows(); welding.activate(tool.id==='welding'); thermal.activate(tool.id==='thermal-cycle'); tool.activate?.(); updateExport();
+  viewer.highlight([]); viewer.clearArrows(); welding.activate(tool.id==='welding'); thermal.activate(tool.id==='thermal-cycle'); localTrial.activate(tool.id==='local-trial'); tool.activate?.(); updateExport();
   get('empty').hidden=!!info || (tool.id==='welding' && welding.hasPaths);
 }
 activateTool(workspaceTools[0]);
 
-function updateSelection() {
-  previewGeneration++;
-  displayedLoads.clear();updateLoadChecks();
-  viewer.highlight(activeTool.id==='surface-load'?selected:[]);
-  currentPreview=null;
-  get('selected-count').textContent = String(selected.length);
-  get('area-info').textContent = '—'; get('force-info').textContent = '选面后显示合力'; viewer.clearArrows();
-}
-
-async function pick() {
-  if (lastSeed == null) return;
-  const result = await (await api('select', {seed: lastSeed, angle: number('angle')})).json();
-  const region: number[] = result.faces;
-  const mode = select('selection-mode').value;
-  selected = mode === 'add' ? [...new Set([...baseSelection, ...region])] : mode === 'remove' ? baseSelection.filter(face=>!region.includes(face)) : region;
-  updateSelection();
-  if (selected.length) await showPreview();
-}
-
-function currentLoad(): Load {
-  if (!info) throw new Error('请导入模型');
-  const cases = select('case-mode').value === 'all' ? info.cases.filter(c=>!c.initial).map(c=>c.id) : Array.from(get('case-list').querySelectorAll<HTMLInputElement>('input:checked')).map(c=>Number(c.value));
-  return {name: input('load-name').value.trim() || '面载荷', faces: [...selected], magnitude: number('magnitude'), mode: select('mode').value,
-    direction: [number('dx'),number('dy'),number('dz')], cases, length_unit: modelLengthUnit, force_unit: 'N', pressure_unit: select('pressure-unit').value};
-}
-
-async function showPreview(): Promise<Preview> {
-  const generation=++previewGeneration,modelId=info?.id;
-  const result: Preview = await (await api('preview', currentLoad())).json();
-  if(generation!==previewGeneration || modelId!==info?.id) return result;
-  currentPreview=result; drawPreview();
-  if(activeTool.id==='surface-load') viewer.highlight(selected);
-  get('selected-count').textContent=String(selected.length);
-  get('area-info').textContent = format(result.area*modelScale()**2)+' mm²';
-  get('force-info').textContent = `合力 (${result.force.map(format).join(', ')}) N`;
-  return result;
-}
-function drawPreview() {
-  if(activeTool.id==='surface-load' && currentPreview) viewer.showArrows(currentPreview.centers.map(point=>point.map(value=>value*modelScale())),currentPreview.directions,currentPreview.area*modelScale()**2,currentPreview.face_ids);
-}
-
-function updateLoadChecks() {
-  get('load-list').querySelectorAll<HTMLInputElement>('[data-load-visible]').forEach(box=>box.checked=displayedLoads.has(Number(box.dataset.loadVisible)));
-  get('load-list').querySelectorAll<HTMLButtonElement>('.load-select').forEach(button=>button.setAttribute('aria-pressed',String(displayedLoads.has(Number(button.dataset.loadIndex)))));
-  get('show-all-loads').setAttribute('aria-pressed',String(!!loads.length && displayedLoads.size===loads.length));
-  get<HTMLButtonElement>('show-all-loads').disabled=!loads.length;
-}
-function drawSavedLoads() {
-  previewGeneration++;
-  currentPreview=null;updateLoadChecks();
-  const shown=[...displayedLoads].map(index=>loads[index]);
-  const faces=[...new Set(shown.flatMap(load=>load.spec.faces))];
-  viewer.highlight(faces);
-  viewer.showArrows(shown.flatMap(load=>load.result.centers.map(point=>point.map(value=>value*modelScale()))),shown.flatMap(load=>load.result.directions),shown.reduce((area,load)=>area+load.result.area*modelScale()**2,0),shown.flatMap(load=>load.result.face_ids));
-  get('selected-count').textContent=String(faces.length);
-  get('area-info').textContent=shown.length===1?format(shown[0].result.area*modelScale()**2)+' mm²':'—';
-  get('force-info').textContent=shown.length===1?`合力 (${shown[0].result.force.map(format).join(', ')}) N`:`已显示 ${shown.length} 项载荷`;
-}
-
 function updateExport() {
-  get('export').hidden=activeTool?.id==='thermal-cycle';
+  get('export').hidden=activeTool?.id==='thermal-cycle' || activeTool?.id==='local-trial';
   if(activeTool?.id==='welding') {
     setIcon(get('export'),'download','导出 Python 脚本');
     get<HTMLButtonElement>('export').disabled=busy || !welding.canExport;
     return;
   }
   setIcon(get('export'),'download','导出 DAT 文件组');
-  const consistent = loads.every(({spec})=>spec.length_unit===modelLengthUnit && spec.force_unit==='N');
-  get<HTMLButtonElement>('export').disabled = busy || !loads.length || !consistent;
-}
-function renderLoads() {
-  const list = get('load-list'); list.replaceChildren();
-  loads.forEach(({spec, result}, index) => {
-    const row = document.createElement('div'); row.className = 'load-card';
-    const title = document.createElement('button'); title.className='load-select';title.textContent = spec.name;title.dataset.loadIndex=String(index);title.title='显示 '+spec.name;
-    title.onclick=()=>{displayedLoads.clear();displayedLoads.add(index);drawSavedLoads();};
-    const check=document.createElement('input');check.type='checkbox';check.dataset.loadVisible=String(index);check.setAttribute('aria-label','显示 '+spec.name);
-    check.onchange=()=>{if(check.checked) displayedLoads.add(index);else displayedLoads.delete(index);drawSavedLoads();};
-    const detail = document.createElement('small'); detail.textContent = `${format(spec.magnitude)} ${spec.pressure_unit} · ${spec.faces.length.toLocaleString()} 个面`;
-    const edit = iconButton('edit','编辑 '+spec.name); edit.onclick = ()=>editLoad(index);
-    const remove = iconButton('delete','删除 '+spec.name); remove.onclick = ()=>{
-      if (busy) return; loads.splice(index,1); editing = null;displayedLoads.clear(); renderLoads();drawSavedLoads();
-    };
-    const heading=document.createElement('div');heading.className='load-row';heading.append(check,title,edit,remove);
-    row.append(heading,detail); list.append(row);
-  });
-  get('load-count').textContent = String(loads.length); get('combined').hidden = !loads.length;
-  input('load-name').value = '载荷 '+(loads.length+1);
-  get('load-heading').textContent = '设置面载荷'; updateCombined(); updateExport();updateLoadChecks();
-}
-
-function editLoad(index: number) {
-  if (busy) return;
-  editing = index; const spec = loads[index].spec;
-  selected = [...spec.faces]; lastSeed = null; updateSelection();
-  for (const [id,value] of Object.entries({'load-name':spec.name, magnitude:spec.magnitude, mode:spec.mode, dx:spec.direction[0],dy:spec.direction[1],dz:spec.direction[2], 'pressure-unit':spec.pressure_unit})) input(id).value=String(value);
-  select('case-mode').value='custom'; get('case-list').hidden=false;
-  get('case-list').querySelectorAll<HTMLInputElement>('input').forEach(element=>element.checked=spec.cases.includes(Number(element.value)));
-  get('direction').hidden=spec.mode!=='manual'; get('load-heading').textContent='编辑：'+spec.name;
-  void run('正在预览载荷…', async()=>{await showPreview();});
-}
-
-function updateCombined() {
-  const id = Number(select('combined-case').value);
-  const force = [0,0,0];
-  for (const {spec,result} of loads) if (spec.cases.includes(id)) result.force.forEach((value,i)=>force[i]+=value*(spec.force_unit==='kN'?1000:1));
-  get('combined-force').textContent=`合力 (${force.map(format).join(', ')}) N`;
+  get<HTMLButtonElement>('export').disabled = busy || !faceLoad.canExport;
 }
 
 async function importFiles(root: string) {
@@ -328,8 +207,8 @@ async function displayModel(next: ModelInfo, hasMesh: boolean) {
   showImportProgress('正在构建视窗模型');
   await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
   mesh!.points=mesh!.points.map(value=>value*modelScale());
-  viewer.load(mesh!); get('empty').hidden=true; selected=[]; loads.length=0; editing=null; lastSeed=null;
-  resetExplosion();get<HTMLButtonElement>('explode').disabled=activeTool.id==='welding' || activeTool.id==='thermal-cycle';
+  viewer.load(mesh!); get('empty').hidden=true;
+  resetExplosion();get<HTMLButtonElement>('explode').disabled=activeTool.id==='welding' || activeTool.id==='thermal-cycle' || activeTool.id==='local-trial';
   setModelUploadButton(true);get('model-info-wrap').hidden=false;
   get('model-info').textContent=`${info.filename}\n${info.nodes.toLocaleString()} 节点\n${info.elements.toLocaleString()} 单元 · ${info.faces.toLocaleString()} 外表面`;
   get('body-count').textContent=String(info.bodies.length);
@@ -340,7 +219,7 @@ async function displayModel(next: ModelInfo, hasMesh: boolean) {
   name.textContent=info.filename;name.title=info.filename;heading.append(all,name);tree.append(heading);bodies.append(tree);
   const visibilityInputs:HTMLInputElement[]=[];
   const updateAll=()=>{const count=visibilityInputs.filter(checkbox=>checkbox.checked).length;all.checked=count===visibilityInputs.length;all.indeterminate=count>0 && !all.checked;};
-  const setAll=(visible:boolean)=>{for(const checkbox of visibilityInputs){checkbox.checked=visible;viewer.showBody(Number(checkbox.dataset.bodyVisible),visible);} if(!visible){selected=[];lastSeed=null;updateSelection();}updateAll();};
+  const setAll=(visible:boolean)=>{for(const checkbox of visibilityInputs){checkbox.checked=visible;viewer.showBody(Number(checkbox.dataset.bodyVisible),visible);} if(!visible)faceLoad.hideBody(mesh!);updateAll();};
   all.onclick=event=>event.stopPropagation();all.onchange=()=>setAll(all.checked);
   [...info.bodies].sort((first,second)=>(second.volume ?? -1)-(first.volume ?? -1) || first.id-second.id).forEach(body=>{
     const card=document.createElement('details'); card.className='body-card';card.dataset.bodyId=String(body.id);
@@ -349,7 +228,7 @@ async function displayModel(next: ModelInfo, hasMesh: boolean) {
     const checkbox=document.createElement('input'); checkbox.type='checkbox'; checkbox.checked=true;
     checkbox.dataset.bodyVisible=String(body.id);visibilityInputs.push(checkbox);
     checkbox.onclick=event=>event.stopPropagation();
-    checkbox.onchange=()=>{ viewer.showBody(body.id,checkbox.checked);updateAll(); if (!checkbox.checked) {selected=selected.filter(face=>mesh!.body_ids[face]!==body.id);lastSeed=null;updateSelection();} };
+    checkbox.onchange=()=>{ viewer.showBody(body.id,checkbox.checked);updateAll(); if (!checkbox.checked)faceLoad.hideBody(mesh!,body.id); };
     label.append(checkbox,document.createTextNode(body.name));
     const options=document.createElement('div'); options.className='body-options';
     const color=document.createElement('input'); color.type='color'; color.value=viewer.bodyColor(body.id); color.setAttribute('aria-label',body.name+' 颜色');
@@ -370,14 +249,9 @@ async function displayModel(next: ModelInfo, hasMesh: boolean) {
     const volume=document.createElement('small');volume.className='body-volume';volume.textContent=body.volume===null?'体积未确定':format(body.volume*modelScale()**3)+' mm³';
     options.append(transparent,volume);summary.append(label,color);card.append(summary,options,transparency);tree.append(card);
   });
-  const cases=get('case-list'), combined=select('combined-case'); cases.replaceChildren(); combined.replaceChildren();
-  info.cases.forEach(item=>{
-    const label=document.createElement('label'); const checkbox=document.createElement('input'); checkbox.type='checkbox'; checkbox.value=String(item.id); checkbox.checked=!item.initial;
-    label.append(checkbox,document.createTextNode(item.name+(item.initial?'（初始）':''))); cases.append(label);
-    if (!item.initial) combined.add(new Option(item.name,String(item.id)));
-  });
-  updateSelection(); renderLoads(); welding.refresh();
+  faceLoad.reset(); welding.refresh();
   if(activeTool.id==='thermal-cycle')showImportProgress('正在计算焊路采样节点');
+  await localTrial.modelChanged(info.supports_loads);
   await thermal.modelChanged(info.supports_loads);
 }
 
@@ -438,31 +312,8 @@ document.addEventListener('pointerdown',event=>{if(!importOptions.contains(event
 document.addEventListener('keydown',event=>{if(event.key==='Escape' && importOptions.open){importOptions.open=false;get('import-settings').focus();}});
 select('model-format').onchange=()=>{importOptions.open=false;};
 setupSidebarResize(document.querySelector('main')!);
-input('angle').oninput=()=>{get('angle-value').textContent=input('angle').value+'°';};
-input('angle').onchange=()=>{if(lastSeed!==null) void run('正在更新选择…',pick,false);};
-get('clear').onclick=()=>{if(!busy){selected=[];lastSeed=null;editing=null;updateSelection();}};
-function refreshLoadPreview() {
-  if(busy || !selected.length || !info) return;
-  displayedLoads.clear();updateLoadChecks();
-  const generation=previewGeneration+1;
-  void showPreview().catch(error=>{if(generation===previewGeneration) message((error as Error).message);});
-}
-select('mode').onchange=()=>{get('direction').hidden=select('mode').value!=='manual';refreshLoadPreview();};
-for(const id of ['magnitude','pressure-unit','dx','dy','dz']) input(id).onchange=refreshLoadPreview;
-select('case-mode').onchange=()=>{get('case-list').hidden=select('case-mode').value!=='custom';};
-select('combined-case').onchange=updateCombined;
-get('show-all-loads').onclick=()=>{const all=displayedLoads.size===loads.length;displayedLoads.clear();if(!all) loads.forEach((_,index)=>displayedLoads.add(index));drawSavedLoads();};
-get('save-load').onclick=()=>{void run('正在保存载荷…',async()=>{
-  const spec=currentLoad(); const result:Preview=await (await api('preview',spec)).json();
-  const index=editing??loads.length;
-  if(editing!==null) loads[editing]={spec,result}; else loads.push({spec,result});
-  editing=null;displayedLoads.clear();displayedLoads.add(index); renderLoads();drawSavedLoads();
-});};
 get('export').onclick=()=>{void run('正在生成新文件…',async()=>{
   if(activeTool.id==='welding') {await welding.export();return;}
-  const response=await api('export',{loads:loads.map(load=>load.spec)});
-  const url=URL.createObjectURL(await response.blob());const link=document.createElement('a');link.href=url;
-  link.download=info!.filename.split('/').pop()!.replace(/\.dat$/i,'')+'_loads.zip';link.click();
-  setTimeout(()=>URL.revokeObjectURL(url),10000);message('已生成文件组，原文件保持不变。');
+  await faceLoad.export();
 });};
 if(!token) message('请通过启动程序打开工具。');

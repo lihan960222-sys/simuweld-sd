@@ -30,3 +30,10 @@
 #weld-heat-save{display:inline-flex;align-items:center;justify-content:center;flex:1;gap:var(--space-xs);min-height:40px}
 #weld-heat-save svg{width:19px;height:19px;flex-shrink:0;stroke-width:1.7}
 #weld-heat-status{margin:var(--space-xs) 0 0}
+.weld-range { flex-wrap: wrap; }
+#weld-time { font-size: 13px; line-height: 1.7; display: block; font-variant-numeric: tabular-nums; }
+.weld-range button[aria-pressed=true] { background: var(--color-accent-wash); border-color: var(--color-accent); color: var(--color-accent-hover); }
+#weld-list { max-height: 400px; overflow-y: auto; }
+[data-tool=welding] .input-row { min-width: 0; }
+[data-tool=welding] .row-buttons { flex-wrap: wrap; }
+.weld-entry-name[aria-pressed=true] { color: var(--color-ink); background: var(--color-accent-wash); }

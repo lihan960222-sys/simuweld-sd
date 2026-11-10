@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wlFixedNodes version="2026.2" product="Simufact Welding" product_version="2026.2.0.1785151010" file_time_stamp="2026-11-09T11:36:36">
+    <name display_name="固定节点" internal_name="BC-1-X"/>
+    <start_time_active>false</start_time_active>
+    <stop_time_active>false</stop_time_active>
+    <start_time dimension="9" unit="0" value="0.0"/>
+    <stop_time dimension="9" unit="0" value="0.0"/>
+    <x_fixed_dof>true</x_fixed_dof>
+    <y_fixed_dof>true</y_fixed_dof>
+    <z_fixed_dof>true</z_fixed_dof>
+    <fixed_displacements node_Number="486243" model_display_name="PLATE2_20261023" model_internal_name="Geom-2-PLATE2X202610"/>
+</wlFixedNodes>

@@ -4,174 +4,219 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 
+TOLERANCE_MM = 1e-9
+
+
 def path_geometry(path):
     points = np.asarray(path["points_mm"], dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 2 or not np.isfinite(points).all():
+        raise ValueError(f"焊路 {path['id']} 的坐标无效")
     vectors = np.diff(points, axis=0)
     lengths = np.linalg.norm(vectors, axis=1)
     if np.any(lengths <= 1e-10):
-        raise ValueError(f"焊路 {path['id']} 包含重复位置，无法判断转弯")
+        raise ValueError(f"焊路 {path['id']} 包含重复位置，无法计算连续采样")
     directions = vectors / lengths[:, None]
     angles = np.degrees(np.arccos(np.clip(np.sum(directions[:-1] * directions[1:], axis=1), -1, 1)))
     return points, vectors, lengths, np.r_[0., np.cumsum(lengths)], angles
 
 
 def sampling_parameters(paths, values=None):
-    angles = np.concatenate([path_geometry(path)[4] for path in paths])
-    positive = angles[angles > .01]
-    angle = float(np.clip(np.median(positive) * .5, .1, 45)) if len(positive) else 15.
-    result = dict(spacing_mm=2., offsets_mm=[-.75, -.25, 0., .25, .75], surface="both",
-                  search_mm=.25, include_turns=True, turn_angle_deg=round(angle, 3))
+    result = {"search_mm": .25, "divisions": {
+        str(path["id"]): {"mode": "length", "value": 2.} for path in paths}}
     if values is not None:
         if not isinstance(values, dict) or set(values) - set(result):
             raise ValueError("采样参数包含未知字段")
-        result.update(values)
-    if result["turn_angle_deg"] is None:
-        result["turn_angle_deg"] = round(angle, 3)
-    for key in ("spacing_mm", "search_mm", "turn_angle_deg"):
-        value = result[key]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-            raise ValueError("采样间距、搜索距离和转弯角度必须为有限正数")
-    if result["turn_angle_deg"] > 180 or result["surface"] not in ("upper", "lower", "both") or not isinstance(result["include_turns"], bool):
-        raise ValueError("采样表面或转弯参数无效")
-    offsets = result["offsets_mm"]
-    if not isinstance(offsets, list) or not offsets or len(offsets) > 101 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in offsets):
-        raise ValueError("横向距离需要包含 1 至 101 个有限数值")
-    result["offsets_mm"] = sorted(set(float(v) for v in offsets))
+        divisions = values.get("divisions", {})
+        if not isinstance(divisions, dict) or set(divisions) - set(result["divisions"]):
+            raise ValueError("分段参数包含未知焊路")
+        result["search_mm"] = values.get("search_mm", result["search_mm"])
+        result["divisions"].update(divisions)
+    radius = result["search_mm"]
+    if isinstance(radius, bool) or not isinstance(radius, (int, float)) or not math.isfinite(radius) or radius <= 0:
+        raise ValueError("搜索距离必须为有限正数")
+    for path in paths:
+        division = result["divisions"][str(path["id"])]
+        if not isinstance(division, dict) or set(division) != {"mode", "value"}:
+            raise ValueError("分段参数需要包含 mode 和 value")
+        mode, value = division["mode"], division["value"]
+        if (mode not in ("length", "count") or isinstance(value, bool)
+                or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0):
+            raise ValueError("分段方式或数值无效")
+        if mode == "count" and (not isinstance(value, int) or value > 250000):
+            raise ValueError("分段数量必须为不超过 250000 的正整数")
+        length = path_geometry(path)[3][-1]
+        count = length / value if mode == "length" else value
+        if not math.isfinite(count) or count > 250000:
+            raise ValueError("分段数量超过 250000，请增加分段长度")
+        result["divisions"][str(path["id"])] = {"mode": mode, "value": value}
     return result
 
 
-class ComponentSurface:
-    def __init__(self, model, points, indices):
-        self.indices = np.asarray(indices)
-        self.xyz = points[self.indices]
-        self.center = self.xyz.mean(axis=0)
-        eigenvalues, basis = np.linalg.eigh(np.cov((self.xyz - self.center).T))
-        if eigenvalues[1] <= 0 or eigenvalues[0] > eigenvalues[1] * .2:
-            raise ValueError("组件几何无法确定板件厚度方向，当前采样需要具有明确上下表面的板件")
-        self.normal = basis[:, 0]
-        if self.normal[np.argmax(np.abs(self.normal))] < 0:
-            self.normal = -self.normal
-        self.axes = basis[:, 1:]
-        included = np.zeros(len(points), dtype=bool)
-        included[self.indices] = True
-        triangles = model.triangles[np.all(included[model.triangles], axis=1)]
-        xyz = points[triangles]
-        projected = (xyz - self.center) @ self.axes
-        first = projected[:, 1] - projected[:, 0]
-        second = projected[:, 2] - projected[:, 0]
-        determinant = first[:, 0] * second[:, 1] - first[:, 1] * second[:, 0]
-        valid = np.abs(determinant) > 1e-12
-        self.triangles = triangles[valid]
-        self.projected = projected[valid]
-        self.xyz_triangles = xyz[valid]
-        self.first, self.second, self.determinant = first[valid], second[valid], determinant[valid]
-        if not len(self.triangles):
-            raise ValueError("组件没有可用于采样的板件表面")
-        centers = self.projected.mean(axis=1)
-        self.radius = float(np.linalg.norm(self.projected - centers[:, None], axis=2).max())
-        self.tree = cKDTree(centers)
-        normals = np.cross(self.xyz_triangles[:, 1] - self.xyz_triangles[:, 0], self.xyz_triangles[:, 2] - self.xyz_triangles[:, 0])
-        orientation = normals @ self.normal
-        self.side_indices = {side: np.unique(self.triangles[mask]) for side, mask in
-                             (("upper", orientation > 1e-12), ("lower", orientation < -1e-12))}
-        if any(not len(indices) for indices in self.side_indices.values()):
-            raise ValueError("组件缺少可识别的上下外表面")
-        self.side_points = {side: points[indices] for side, indices in self.side_indices.items()}
-        self.node_trees = {side: cKDTree(xyz) for side, xyz in self.side_points.items()}
+def nearest_intervals(tree, points, start, end, radius):
+    vector = end - start
+    length = float(np.linalg.norm(vector))
+    direction = vector / length
+    candidates = np.asarray(sorted(tree.query_ball_point(
+        (start + end) / 2, length / 2 + radius + TOLERANCE_MM, eps=0)), dtype=int)
+    if not len(candidates):
+        return []
+    relative = points[candidates] - start
+    along = relative @ direction
+    perpendicular = relative - along[:, None] * direction
+    height_squared = np.einsum("ij,ij->i", perpendicular, perpendicular)
+    closest = np.clip(along, 0, length)
+    distance = np.linalg.norm(relative - closest[:, None] * direction, axis=1)
+    valid = distance <= radius + TOLERANCE_MM
+    candidates, relative, along, height_squared = candidates[valid], relative[valid], along[valid], height_squared[valid]
+    if not len(candidates):
+        return []
+    intercepts = np.einsum("ij,ij->i", relative, relative)
+    envelope, beginnings = [], []
+    # 距离平方的二次项相同；剩余一次函数直接给出连续最近区间。
+    for index in np.lexsort((candidates, intercepts, along)):
+        if envelope and along[index] == along[envelope[-1]]:
+            continue
+        crossing = -math.inf
+        while envelope:
+            previous = envelope[-1]
+            crossing = (intercepts[index] - intercepts[previous]) / (2 * (along[index] - along[previous]))
+            if crossing > beginnings[-1]:
+                break
+            envelope.pop()
+            beginnings.pop()
+        envelope.append(int(index))
+        beginnings.append(float(crossing) if len(envelope) > 1 else -math.inf)
+    boundaries = [0., *[value for value in beginnings[1:] if 0 < value < length], length]
 
-    def intersections(self, point):
-        projected = (point - self.center) @ self.axes
-        candidates = np.asarray(self.tree.query_ball_point(projected, self.radius + 1e-8), dtype=int)
-        relative = projected - self.projected[candidates, 0]
-        first, second = self.first[candidates], self.second[candidates]
-        u = (relative[:, 0] * second[:, 1] - relative[:, 1] * second[:, 0]) / self.determinant[candidates]
-        v = (first[:, 0] * relative[:, 1] - first[:, 1] * relative[:, 0]) / self.determinant[candidates]
-        valid = (u >= -1e-8) & (v >= -1e-8) & (u + v <= 1 + 1e-8)
-        candidates, u, v = candidates[valid], u[valid], v[valid]
-        if not len(candidates):
-            return {}
-        xyz = self.xyz_triangles[candidates]
-        hits = xyz[:, 0] + u[:, None] * (xyz[:, 1] - xyz[:, 0]) + v[:, None] * (xyz[:, 2] - xyz[:, 0])
-        heights = hits @ self.normal
-        result = {}
-        for side, index in (("lower", int(np.argmin(heights))), ("upper", int(np.argmax(heights)))):
-            normal = np.cross(xyz[index, 1] - xyz[index, 0], xyz[index, 2] - xyz[index, 0])
-            normal /= np.linalg.norm(normal)
-            if normal @ self.normal < 0:
-                normal = -normal
-            result[side] = hits[index], normal
-        return result
+    def winner(position):
+        distances = np.linalg.norm(relative - position * direction, axis=1)
+        minimum = float(distances.min())
+        return int(np.flatnonzero(distances <= minimum + TOLERANCE_MM)[0]), minimum
+
+    result = []
+    for lower, upper in zip(boundaries[:-1], boundaries[1:]):
+        index, _ = winner((lower + upper) / 2)
+        if height_squared[index] > (radius + TOLERANCE_MM) ** 2:
+            continue
+        reach = math.sqrt(max(0., radius ** 2 - float(height_squared[index])))
+        first = max(lower, float(along[index]) - reach)
+        last = min(upper, float(along[index]) + reach)
+        if first <= last:
+            result.append((first, last, int(candidates[index])))
+    # 区间交点也执行相同的等距编号规则，保留只在端点最近的节点。
+    for position in boundaries:
+        index, distance = winner(position)
+        if distance <= radius + TOLERANCE_MM:
+            result.append((position, position, int(candidates[index])))
+    return sorted(result)
 
 
-def select_nodes(model, points, node_index, components, paths, parameters, surfaces):
+def path_point(points, normals, arc, position):
+    index = min(max(int(np.searchsorted(arc, position, side="right") - 1), 0), len(arc) - 2)
+    ratio = (position - arc[index]) / (arc[index + 1] - arc[index])
+    point = points[index] + ratio * (points[index + 1] - points[index])
+    normal = normals[index] + ratio * (normals[index + 1] - normals[index])
+    size = float(np.linalg.norm(normal))
+    if not math.isfinite(size) or size <= 1e-12:
+        raise ValueError("焊路方向插值产生了零长度方向")
+    return point, normal / size
+
+
+def select_nodes(model, points, node_index, components, paths, parameters, surfaces=None):
+    keys = sorted({(name, int(node)) for name, ids in components.items() for node in ids})
+    if not keys:
+        raise ValueError("组件没有可用于采样的真实节点")
+    if any(node not in node_index for _, node in keys):
+        raise ValueError("组件引用了不存在的真实节点")
+    node_points = np.asarray([points[node_index[node]] for _, node in keys], dtype=float)
+    if not np.isfinite(node_points).all():
+        raise ValueError("组件节点坐标包含非有限数值")
+    tree = cKDTree(node_points)
     selected, missing = {}, []
-    total_targets = 0
-    for path in paths:
-        xyz, vectors, lengths, arc, angles = path_geometry(path)
-        turns = arc[1:-1][angles >= parameters["turn_angle_deg"]]
-        ratio = float(arc[-1]) / parameters["spacing_mm"]
-        if not math.isfinite(ratio) or ratio > 250000:
-            raise ValueError("采样目标超过 250000 个，请增加采样间距或减少横向距离")
-        count = math.ceil(ratio)
-        total_targets += (count + len(turns) + 1) * len(parameters["offsets_mm"]) * len(components) * (2 if parameters["surface"] == "both" else 1)
-        if total_targets > 250000:
-            raise ValueError("采样目标超过 250000 个，请增加采样间距或减少横向距离")
-        stations = np.r_[np.arange(count) * parameters["spacing_mm"], arc[-1], turns if parameters["include_turns"] else []]
-        stations = np.unique(np.round(stations, 10))
-        path["stations_mm"], path["turn_positions_mm"] = stations.tolist(), turns.tolist()
-        path["turn_angles_deg"] = angles.tolist()
-        path["representative_node"] = None
-        path["representative_component"] = None
-        path["arrival_s"] = None
-        beginning_missing = len(missing)
-        representatives = []
-        for distance in stations:
-            segment = min(max(int(np.searchsorted(arc, distance, side="right") - 1), 0), len(lengths) - 1)
-            station = xyz[segment] + vectors[segment] * ((distance - arc[segment]) / lengths[segment])
-            tangent = vectors[segment] / lengths[segment]
-            for component, surface in surfaces.items():
-                intersections = surface.intersections(station)
-                normal = intersections.get("upper", (None, surface.normal))[1]
-                lateral = np.cross(normal, tangent)
-                norm = np.linalg.norm(lateral)
-                if norm < 1e-8:
-                    raise ValueError(f"焊路 {path['id']} 的切向垂直于板件表面，无法确定横向采样位置")
-                lateral /= norm
-                for offset in parameters["offsets_mm"]:
-                    target = station + lateral * offset
-                    hits = surface.intersections(target)
-                    for side in ("upper", "lower") if parameters["surface"] == "both" else (parameters["surface"],):
-                        details = dict(component=component, path_id=path["id"], station_mm=float(distance), offset_mm=offset, surface=side)
-                        if side not in hits:
-                            missing.append(dict(**details, xyz_mm=target.tolist(), reason="目标位置没有板件表面交点"))
-                            continue
-                        target = hits[side][0]
-                        error, local = surface.node_trees[side].query(target)
-                        if error > parameters["search_mm"] + 1e-10:
-                            missing.append(dict(**details, xyz_mm=target.tolist(), nearest_distance_mm=float(error), reason="最近节点超过搜索距离"))
-                            continue
-                        node = int(model.node_ids[surface.side_indices[side][int(local)]])
-                        key = component, node
-                        record = selected.setdefault(key, dict(component=component, node_id=node, xyz_mm=surface.side_points[side][local].tolist(), paths=set(), targets=[]))
-                        record["paths"].add(path["id"])
-                        record["targets"].append(dict(**details, xyz_mm=target.tolist(), distance_mm=float(error)))
-                        representatives.append((abs(distance - arc[-1] / 2), abs(offset), 0 if side == "upper" else 1, -float(target @ normal), component, node, float(distance)))
-        path["node_count"] = sum(path["id"] in item["paths"] for item in selected.values())
-        path["missing_count"] = len(missing) - beginning_missing
-        if representatives:
-            *_, component, node, position = min(representatives)
-            path["representative_component"], path["representative_node"] = component, node
-            normal = surfaces[component].normal
-            relative = points[node_index[node]] - xyz[:-1]
-            relative -= np.outer(relative @ normal, normal)
-            projected = vectors - np.outer(vectors @ normal, normal)
-            squared = np.einsum("ij,ij->i", projected, projected)
-            if np.any(squared <= 1e-16):
-                raise ValueError(f"焊路 {path['id']} 包含垂直板面的运动，无法计算代表节点经过时间")
-            parameters_on_path = np.clip(np.einsum("ij,ij->i", relative, projected) / squared, 0, 1)
-            errors = np.linalg.norm(relative - parameters_on_path[:, None] * projected, axis=1)
-            candidates = np.flatnonzero(errors <= errors.min() + 1e-7)
-            positions = arc[:-1] + parameters_on_path * lengths
-            index = min(candidates, key=lambda value: abs(positions[value] - position))
-            path["arrival_s"] = path["start_s"] + float(positions[index]) / path["speed_mm_s"]
+    total_segments = 0
+    for path_number, path in enumerate(paths, 1):
+        xyz, vectors, lengths, arc, _ = path_geometry(path)
+        normals = np.asarray(path["normals"], dtype=float)
+        if normals.shape != xyz.shape or not np.isfinite(normals).all():
+            raise ValueError(f"焊路 {path['id']} 的方向无效")
+        normal_lengths = np.linalg.norm(normals, axis=1)
+        if np.any(normal_lengths <= 1e-12):
+            raise ValueError(f"焊路 {path['id']} 包含零长度方向")
+        normals = normals / normal_lengths[:, None]
+        duration = path["end_s"] - path["start_s"]
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError(f"焊路 {path['id']} 的持续时间无效")
+        path["label"] = f"焊路 {path_number}"
+        intervals = []
+        for index, (first, last) in enumerate(zip(xyz[:-1], xyz[1:])):
+            intervals.extend((lower + arc[index], upper + arc[index], node)
+                             for lower, upper, node in nearest_intervals(tree, node_points, first, last, parameters["search_mm"]))
+        intervals.sort()
+        unique = sorted({node for _, _, node in intervals})
+        for node in unique:
+            component, node_id = keys[node]
+            record = selected.setdefault(keys[node], {"component": component, "node_id": node_id,
+                "xyz_mm": node_points[node].tolist(), "paths": set(), "segments": []})
+            record["paths"].add(path["id"])
+        gaps, covered = [], 0.
+        for lower, upper, _ in intervals:
+            if lower > covered + TOLERANCE_MM:
+                gaps.append((covered, lower))
+            covered = max(covered, upper)
+        if covered < arc[-1] - TOLERANCE_MM:
+            gaps.append((covered, float(arc[-1])))
+        for first, last in gaps:
+            position, _ = path_point(xyz, normals, arc, (first + last) / 2)
+            missing.append({"path_id": path["id"], "label": path["label"], "component": "",
+                            "xyz_mm": position.tolist(), "start_mm": float(first), "end_mm": float(last),
+                            "length_mm": float(last - first)})
+        division = parameters["divisions"][str(path["id"])]
+        count = division["value"] if division["mode"] == "count" else math.ceil(arc[-1] / division["value"])
+        total_segments += count
+        if total_segments > 250000:
+            raise ValueError("全部焊路的分段数量超过 250000")
+        boundaries = np.linspace(0, arc[-1], count + 1)
+        segments = []
+        for index, (first, last) in enumerate(zip(boundaries[:-1], boundaries[1:]), 1):
+            first_point, first_normal = path_point(xyz, normals, arc, first)
+            last_point, last_normal = path_point(xyz, normals, arc, last)
+            inside = np.flatnonzero((arc > first + TOLERANCE_MM) & (arc < last - TOLERANCE_MM))
+            segment_points = np.vstack((first_point, xyz[inside], last_point))
+            segment_normals = np.vstack((first_normal, normals[inside], last_normal))
+            segment_vectors = np.diff(segment_points, axis=0)
+            segment_lengths = np.linalg.norm(segment_vectors, axis=1)
+            segment_arc = np.r_[first, first + np.cumsum(segment_lengths)]
+            members = sorted({node for lower, upper, node in intervals
+                              if lower <= last + TOLERANCE_MM and upper >= first - TOLERANCE_MM})
+            samples, depths = [], []
+            label = f"{path['label']} · 第 {index} 段"
+            for node in members:
+                relative = node_points[node] - segment_points[:-1]
+                ratios = np.clip(np.einsum("ij,ij->i", relative, segment_vectors) / segment_lengths ** 2, 0, 1)
+                projections = segment_points[:-1] + ratios[:, None] * segment_vectors
+                distances = np.linalg.norm(node_points[node] - projections, axis=1)
+                positions = segment_arc[:-1] + ratios * segment_lengths
+                closest = np.flatnonzero(distances <= distances.min() + TOLERANCE_MM)
+                hit = min(closest, key=lambda item: (abs(positions[item] - (first + last) / 2), positions[item]))
+                station = float(np.clip(positions[hit], first, last))
+                normal = segment_normals[hit] + ratios[hit] * (segment_normals[hit + 1] - segment_normals[hit])
+                size = float(np.linalg.norm(normal))
+                if size <= 1e-12:
+                    raise ValueError(f"{label} 的采样位置包含无效方向")
+                depths.append(float((projections[hit] - node_points[node]) @ (normal / size)))
+                component, node_id = keys[node]
+                samples.append({"component": component, "node_id": node_id, "xyz_mm": node_points[node].tolist(),
+                                "station_mm": station, "arrival_s": float(path["start_s"] + station / arc[-1] * duration),
+                                "distance_mm": float(distances[hit])})
+                selected[keys[node]]["segments"].append({"path_id": path["id"], "index": index, "label": label})
+            segments.append({"path_id": path["id"], "index": index, "label": label,
+                             "start_mm": float(first), "end_mm": float(last), "length_mm": float(last - first),
+                             "points_mm": segment_points.tolist(), "normals": segment_normals.tolist(),
+                             "start_s": float(path["start_s"] + first / arc[-1] * duration),
+                             "end_s": float(path["start_s"] + last / arc[-1] * duration),
+                             "cooling_end_s": path["cooling_end_s"], "samples": samples, "node_count": len(samples),
+                             "radius_mm": max((item["distance_mm"] for item in samples), default=0.) + TOLERANCE_MM,
+                             "depth_mm": max([0., *depths]) + TOLERANCE_MM})
+        path.update(division=dict(division), segments=segments, node_count=len(unique), missing_count=len(gaps),
+                    missing_length_mm=float(sum(last - first for first, last in gaps)))
     return selected, missing

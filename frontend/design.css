@@ -133,12 +133,6 @@ input[type=range]:disabled::-webkit-slider-thumb { background: var(--color-disab
 .view-tools button:hover { background: var(--color-panel); }
 .view-tools button:not(.icon-button) { border-radius: 10px; }
 .view-tools select { min-height: 36px; }
-.selection-bar { background: var(--color-elevated); border-color: var(--color-rule); box-shadow: 0 8px 24px var(--color-shadow); }
-.force-info, #case-list { background: var(--color-panel); border: 1px solid var(--color-rule); }
-.load-card { border-bottom-color: var(--color-rule); }
-.load-select[aria-pressed=true], .weld-entry-name[aria-pressed=true] { color: var(--color-ink); background: var(--color-accent-wash); }
-.weld-player { border-top-color: var(--color-rule); }
-.heat-preview { border-color: var(--color-rule); background: var(--color-panel); }
 .model-dialog { border-color: var(--color-rule); border-radius: 16px; box-shadow: 0 18px 50px var(--color-shadow); }
 footer { background: var(--color-paper); }
 @media (max-width: 1100px) {

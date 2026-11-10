@@ -1,75 +1,21 @@
-from io import BytesIO, TextIOWrapper
 import csv
-import json
 from pathlib import Path
 import re
 import secrets
 import sys
-import xml.etree.ElementTree as ET
 from uuid import uuid4
-from zipfile import ZipFile, ZIP_DEFLATED
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from .deck import Deck, safe_path
 from .background import BackgroundModel
 from .geometry import SurfaceModel
-from .loads import LoadSpec, export_model, preview
-from .welding import WeldPlan, generate_script, read_paths
-from .thermal import ThermalConversion, material_temperature
-
-TEMPERATURE_FILE_LIMIT = 10 * 1024**3
-
-
-class LoadInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    faces: list[StrictInt]
-    magnitude: float = Field(gt=0)
-    mode: str
-    cases: list[StrictInt]
-    direction: list[float] = [0, 0, -1]
-    length_unit: str = "mm"
-    force_unit: str = "N"
-    pressure_unit: str = "MPa"
-    name: str = Field(default="面载荷", max_length=80)
-
-
-class ExportInput(BaseModel):
-    loads: list[LoadInput] = Field(min_length=1, max_length=100)
-
-
-class SelectionInput(BaseModel):
-    seed: StrictInt = Field(ge=0)
-    angle: float = Field(ge=0, le=180, allow_inf_nan=False)
-
-
-class ThermalInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    length_unit: str
-    sampling: dict | None = None
-
-
-class ThermalSelectionInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    sampling_id: str = Field(min_length=1, max_length=64)
-
-
-class ThermalSamplingInput(ThermalSelectionInput):
-    sampling: dict
-
-
-class ThermalScriptInput(ThermalSelectionInput):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    room_c: float = Field(gt=-273.15)
-    melting_c: float = Field(gt=-273.15)
-    maximum_mm: float = Field(default=2, gt=0, le=10000)
-    tolerance_c: float = Field(default=5, gt=0, le=100)
-    allow_partial: bool = False
+from . import routes_face_load, routes_weld_paths, routes_thermal_cycle, routes_local_trial
+from .routes_thermal_cycle import TEMPERATURE_FILE_LIMIT
 
 
 def create_app(token: str):
@@ -78,10 +24,8 @@ def create_app(token: str):
     app.state.model_id = None
     app.state.importing = False
     app.state.import_progress = {"active": False, "stage": "", "completed": None, "total": None, "unit": ""}
-    app.state.thermal = None
-    app.state.thermal_importing = False
-    app.state.thermal_sampling = None
-    web = Path(sys._MEIPASS) / "web" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2] / "dist"
+    external = getattr(sys, "_sd_root", None)
+    web = Path(external) / "shared" / "web" if external else Path(__file__).resolve().parents[2] / "dist"
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -233,154 +177,14 @@ def create_app(token: str):
             raise HTTPException(409, "此模型用于焊路几何背景；面载荷需要导入 Marc DAT")
         return model
 
-    def conversion(request):
-        model = load_model(request)
-        value = app.state.thermal
-        if value is None or value.model is not model:
-            raise HTTPException(409, "请读取当前 DAT 的焊路")
-        if app.state.thermal_importing:
-            raise HTTPException(409, "温度数据正在读取，请稍候")
-        if app.state.thermal_sampling and app.state.thermal_sampling[0] is model:
-            raise HTTPException(409, "采样节点正在计算，请稍候")
-        return value
+    routes_local_trial.register(app, load_model)
+    routes_thermal_cycle.register(app, load_model)
+    routes_face_load.register(app, load_model)
+    routes_weld_paths.register(app)
 
-    def selected_conversion(request, sampling_id):
-        value = conversion(request)
-        if sampling_id != value.sampling_id:
-            raise HTTPException(409, "采样参数已更新，请使用当前预览重新生成温度导出脚本")
-        return value
-
-    @app.post("/api/thermal")
-    async def prepare_thermal(request: Request, data: ThermalInput):
-        model = load_model(request)
-        if app.state.thermal_importing:
-            raise HTTPException(409, "温度数据正在读取，请稍候")
-        if app.state.thermal_sampling and app.state.thermal_sampling[0] is model:
-            raise HTTPException(409, "采样节点正在计算，请稍候")
-        job = (model, object())
-        app.state.thermal_sampling = job
-        app.state.thermal = None
-        try:
-            value = await run_in_threadpool(ThermalConversion, model, data.length_unit, data.sampling)
-            if app.state.model is not model:
-                raise HTTPException(409, "模型已更新，请重新读取焊路")
-            app.state.thermal = value
-            return value.metadata()
-        finally:
-            if app.state.thermal_sampling is job:
-                app.state.thermal_sampling = None
-
-    @app.post("/api/thermal/resample")
-    async def resample_thermal(request: Request, data: ThermalSamplingInput):
-        value = selected_conversion(request, data.sampling_id)
-        job = (value.model, object())
-        app.state.thermal_sampling = job
-        value.exported = False
-        value.temperatures = None
-        value.summary = None
-        try:
-            await run_in_threadpool(value.resample, data.sampling)
-            if app.state.model is not value.model or app.state.thermal is not value:
-                raise HTTPException(409, "模型已更新，请重新读取焊路")
-            return value.metadata()
-        finally:
-            if app.state.thermal_sampling is job:
-                app.state.thermal_sampling = None
-
-    @app.post("/api/thermal/export")
-    async def temperature_script(request: Request, data: ThermalSelectionInput):
-        return Response(selected_conversion(request, data.sampling_id).export_script(), media_type="text/x-python; charset=utf-8",
-                        headers={"Content-Disposition": 'attachment; filename="export_node_temperatures.py"'})
-
-    @app.post("/api/thermal/temperatures")
-    async def import_temperatures(request: Request):
-        value = conversion(request)
-        app.state.thermal_importing = True
-        try:
-            async with request.form(max_files=1, max_fields=1, max_part_size=1024*1024) as form:
-                if form.get("sampling_id") != value.sampling_id:
-                    raise HTTPException(409, "温度数据导入关联的采样预览已更新，请重新生成导出脚本")
-                uploaded = form.get("file")
-                if not isinstance(uploaded, UploadFile) or not uploaded.filename:
-                    raise ValueError("请选择温度 CSV")
-                if uploaded.size is not None and uploaded.size > TEMPERATURE_FILE_LIMIT:
-                    raise HTTPException(413, "温度 CSV 不能超过 10 GB")
-                text = TextIOWrapper(uploaded.file, encoding="utf-8-sig", newline="")
-                try:
-                    result = await run_in_threadpool(value.import_temperatures, text)
-                finally:
-                    text.detach()
-            if app.state.model is not value.model:
-                raise HTTPException(409, "模型已更新，请为当前 DAT 重新导入温度数据")
-            return result
-        finally:
-            app.state.thermal_importing = False
-
-    @app.post("/api/thermal/material")
-    async def import_thermal_material(request: Request):
-        conversion(request)
-        async with request.form(max_files=1, max_fields=0, max_part_size=20*1024*1024) as form:
-            uploaded = form.get("file")
-            if not isinstance(uploaded, UploadFile) or not uploaded.filename:
-                raise ValueError("请选择 Simufact XML 材料文件")
-            data = await uploaded.read(20*1024*1024+1)
-            if len(data) > 20*1024*1024:
-                raise ValueError("材料文件不能超过 20 MB")
-            try:
-                return material_temperature(data)
-            except ET.ParseError as error:
-                raise ValueError("材料文件需要为包含 melting_point 的 Simufact XML") from error
-
-    @app.post("/api/thermal/create")
-    async def create_thermal_script(request: Request, data: ThermalScriptInput):
-        code = selected_conversion(request, data.sampling_id).create_script(data.room_c, data.melting_c, data.maximum_mm,
-                                                 data.tolerance_c, data.allow_partial)
-        return Response(code, media_type="text/x-python; charset=utf-8",
-                        headers={"Content-Disposition": 'attachment; filename="create_thermal_cycle.py"'})
-
-    @app.post("/api/select")
-    def select(request: Request, data: SelectionInput):
-        return {"faces": load_model(request).select(data.seed, data.angle)}
-
-    @app.post("/api/preview")
-    def calculate(request: Request, data: LoadInput):
-        return preview(load_model(request), LoadSpec(**data.model_dump()))
-
-    @app.post("/api/export")
-    def export(request: Request, data: ExportInput):
-        model = load_model(request)
-        files, report = export_model(model, [LoadSpec(**item.model_dump()) for item in data.loads])
-        output = BytesIO()
-        with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
-            for name, content in files.items():
-                archive.writestr(name, content)
-            archive.writestr("sfmarc-loads-report.json", json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"))
-        return Response(output.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="sfmarc_loads.zip"'})
-
-    @app.post("/api/weld-paths")
-    async def import_weld_paths(request: Request):
-        paths = []
-        total = 0
-        async with request.form(max_files=256, max_fields=1, max_part_size=20*1024*1024) as form:
-            unit = form.get("unit")
-            for uploaded in form.getlist("files"):
-                if not isinstance(uploaded, UploadFile) or not uploaded.filename:
-                    raise ValueError("请选择 CSV 文件")
-                data = await uploaded.read(20*1024*1024+1)
-                total += len(data)
-                if total > 20*1024*1024:
-                    raise ValueError("CSV 文件组不能超过 20 MB")
-                paths.extend(await run_in_threadpool(read_paths, data, uploaded.filename, unit))
-        if not paths:
-            raise ValueError("请选择 CSV 文件")
-        if len(paths) > 1000 or sum(len(path["points"]) for path in paths) > 100000:
-            raise ValueError("单次导入不能超过 1000 条路径或 10 万个点")
-        return {"paths": paths}
-
-    @app.post("/api/weld-script")
-    def export_weld_script(data: WeldPlan):
-        return Response(generate_script(data), media_type="text/x-python; charset=utf-8",
-                        headers={"Content-Disposition": 'attachment; filename="generate_weld_paths.py"'})
+    @app.get("/api/modules")
+    def module_versions():
+        return {"interface": 1, "versions": getattr(sys, "_sd_versions", {})}
 
     @app.get("/")
     def index():
@@ -392,4 +196,8 @@ def create_app(token: str):
         return FileResponse(web / request.url.path[1:])
 
     app.mount("/assets", StaticFiles(directory=web / "assets", check_dir=False), name="assets")
+    app.mount("/shared", StaticFiles(directory=web if external else web / "shared", check_dir=False), name="shared")
+    for ident in ("face_load", "weld_paths", "thermal_cycle", "local_trial"):
+        folder = Path(external) / "modules" / ident / "web" if external else web / "modules" / ident
+        app.mount("/modules/" + ident, StaticFiles(directory=folder, check_dir=False), name=ident)
     return app

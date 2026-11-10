@@ -1,3 +1,11 @@
+.heat-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 var(--space-sm); }
+.heat-fields label { min-width: 0; }
+#heat-diagram { width: 100%; background: var(--color-panel); border-radius: var(--radius-panel); margin-top: var(--space-xs); }
+#heat-diagram text { font: 11px var(--font-body); fill: var(--color-ink); }
+#heat-diagram .surface-label { fill: var(--color-disc-label); }
+#heat-error { color: var(--color-error); font-size: 12px; min-height: 1lh; }
+#heat-error:empty { display: none; }
+.heat-preview { border-color: var(--color-rule); }
 .heat-parameter-group { border-top: 1px solid var(--color-rule); margin-top: var(--space-md); padding-top: var(--space-sm); }
 .heat-parameter-group > h3 { font-size: 12px; font-weight: 600; margin: 0 0 var(--space-sm); }
 .heat-fields { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(120px,100%),1fr)); gap: var(--space-sm); }

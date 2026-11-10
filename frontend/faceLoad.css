@@ -1,0 +1,17 @@
+.load-row { display: flex; align-items: center; gap: var(--space-2xs); }
+.load-select { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; padding: var(--space-2xs); text-align: left; border: 0; background: transparent; }
+.load-select[aria-pressed=true] { color: var(--color-ink); background: var(--color-accent-wash); }
+.load-card { border-radius: var(--radius-control); border-bottom: 1px solid var(--color-rule); padding: var(--space-md) 0; margin: 0; }
+.load-card strong { display: block; font-size: 14px; overflow-wrap: anywhere; font-weight: 600; }
+.load-card small { display: block; color: var(--color-muted); margin-top: var(--space-2xs); font-size: 12px; }
+#angle-value { float: right; font-size: 14px; color: var(--color-accent-hover); font-weight: 600; }
+#case-list { max-height: 180px; overflow: auto; border: 1px solid var(--color-rule); padding: var(--space-xs); border-radius: var(--radius-control); margin-bottom: var(--space-sm); background: var(--color-panel); }
+#case-list label { display: flex; align-items: center; gap: var(--space-xs); white-space: nowrap; font-size: 12px; margin: var(--space-2xs) 0; }
+.force-info { font-size: 12px; background: var(--color-panel); border: 1px solid var(--color-rule); border-radius: var(--radius-control); padding: var(--space-sm); margin-top: var(--space-xs); color: var(--color-ink); overflow-wrap: anywhere; line-height: 1.7; }
+.selection-bar { position: absolute; bottom: 20px; left: 20px; right: 20px; display: flex; align-items: center; gap: var(--space-2xl); border: 1px solid var(--color-rule); background: var(--color-elevated); padding: var(--space-md) var(--space-lg); border-radius: var(--radius-panel); color: var(--color-ink); box-shadow: 0 8px 24px var(--color-shadow); }
+.selection-bar strong { display: block; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; margin-bottom: var(--space-2xs); }
+.selection-bar span { font-size: 12px; color: var(--color-muted); }
+.selection-bar button { margin-left: auto; font-size: 12px; }
+#combined { margin-top: var(--space-md); }
+#combined-force { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+@media (max-width: 800px) { .selection-bar { gap: var(--space-md); padding: var(--space-sm); } }

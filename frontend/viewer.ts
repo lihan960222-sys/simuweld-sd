@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import type { HeatParameters } from './heatSettings';
 
 export interface MeshData {
@@ -9,6 +12,8 @@ export interface MeshData {
 export type RenderMode = 'solid' | 'wireframe' | 'edges' | 'solid-edges';
 export interface PathData { id: number; points: number[][]; }
 export interface WeldTrailPath { points: number[][]; radius: number; direction: number[]; }
+export interface TrialNode { id:number; xyz_mm:number[]; }
+export interface TrialOverlay { paths:{id:number;points_mm:number[][];color:number;width?:number;selected?:boolean}[]; nodes:TrialNode[]; selected:number[]; faces:{node_ids:number[]}[]; box:{min:number[];max:number[]}|null; showNodes:boolean; previewReady:boolean; }
 
 export class Viewer {
   private renderer = new THREE.WebGLRenderer({antialias: true});
@@ -31,6 +36,8 @@ export class Viewer {
   private conversionNodeSize = 6;
   private conversionTooltip = document.createElement('div');
   private conversionBounds = new THREE.Box3();
+  private conversionDotTexture:THREE.CanvasTexture;
+  private conversionHover = new THREE.Points(new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute([0,0,0],3)),new THREE.PointsMaterial({color:0xffbc58,size:10,sizeAttenuation:false,depthTest:false,depthWrite:false,transparent:true,alphaTest:.5}));
   private weldTrails = new THREE.Group();
   private trailMeshes: THREE.Mesh<THREE.BufferGeometry,THREE.MeshBasicMaterial>[]=[];
   private trailLines: THREE.Line<THREE.BufferGeometry,THREE.LineBasicMaterial>[]=[];
@@ -60,6 +67,16 @@ export class Viewer {
   private palette = [0x9cbbc8, 0xc2cdd5, 0x7897a8, 0xa8b2c7, 0x7faaaa, 0xb6bcb2, 0x89a6bf];
   private renderMode: RenderMode = 'solid';
   private explosion = 0;
+  private trial=new THREE.Group();
+  private trialSurface=new THREE.Group();
+  private trialSurfaceBounds=new THREE.Box3();
+  private trialContextMaterials=new Map<THREE.Material,{opacity:number;transparent:boolean;depthWrite:boolean}>();
+  private trialPicked=new THREE.Points(new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute([0,0,0],3)),new THREE.PointsMaterial({color:0xff8b22,size:11,sizeAttenuation:false,depthTest:false,depthWrite:false,transparent:true,alphaTest:.5}));
+  private trialPickedPoint:{path:number;point:number}|null=null;
+  private trialBounds=new THREE.Box3();
+  private trialData:TrialOverlay={paths:[],nodes:[],selected:[],faces:[],box:null,showNodes:false,previewReady:false};
+  private trialMode='path';
+  private trialPick:((ids:number[],path?:number,point?:number)=>void)|null=null;
 
   constructor(private host: HTMLElement, onPick: (face: number) => void) {
     this.scene.background = new THREE.Color(0xedf2f6);
@@ -82,7 +99,33 @@ export class Viewer {
     light.position.set(3, -4, 5);
     this.scene.add(light, this.models, this.arrows, this.torch);
     this.pathScene.add(this.weldTrails,this.paths,this.hoverPoint);
-    this.conversion.add(this.conversionPaths,this.conversionNodes,this.conversionMissing);
+    const dot=document.createElement('canvas');dot.width=64;dot.height=64;
+    const dotContext=dot.getContext('2d')!;dotContext.fillStyle='#ffffff';dotContext.beginPath();dotContext.arc(32,32,30,0,Math.PI*2);dotContext.fill();
+    this.conversionDotTexture=new THREE.CanvasTexture(dot);
+    this.trial.visible=false;this.pathScene.add(this.trial);
+    this.trialSurface.visible=false;this.scene.add(this.trialSurface);
+    this.trialPicked.material.map=this.conversionDotTexture;this.trialPicked.visible=false;this.trialPicked.renderOrder=28;this.pathScene.add(this.trialPicked);
+    let trialDown:number[]|null=null;
+    const rectangle=document.createElement('div');rectangle.className='lt-selection-rectangle';rectangle.hidden=true;this.host.append(rectangle);
+    this.renderer.domElement.addEventListener('pointerdown',event=>{
+      if(!this.trial.visible || !this.trialPick || event.button!==0)return;
+      trialDown=[event.clientX,event.clientY];
+      if(this.trialMode==='box'){event.stopImmediatePropagation();this.controls.enabled=false;this.renderer.domElement.setPointerCapture(event.pointerId);}
+    },true);
+    this.renderer.domElement.addEventListener('pointermove',event=>{
+      if(!trialDown || this.trialMode!=='box')return;
+      const rect=this.host.getBoundingClientRect();rectangle.hidden=false;
+      Object.assign(rectangle.style,{left:`${Math.min(trialDown[0],event.clientX)-rect.left}px`,top:`${Math.min(trialDown[1],event.clientY)-rect.top}px`,width:`${Math.abs(event.clientX-trialDown[0])}px`,height:`${Math.abs(event.clientY-trialDown[1])}px`});
+    },true);
+    this.renderer.domElement.addEventListener('pointerup',event=>{
+      if(!this.trial.visible || !trialDown || !this.trialPick)return;
+      const start=trialDown;trialDown=null;rectangle.hidden=true;this.controls.enabled=true;
+      if(this.trialMode==='box'&&this.renderer.domElement.hasPointerCapture(event.pointerId))this.renderer.domElement.releasePointerCapture(event.pointerId);
+      if(this.trialMode!=='box' && Math.hypot(event.clientX-start[0],event.clientY-start[1])>4)return;
+      this.pickTrial(start,[event.clientX,event.clientY]);
+    },true);
+    this.conversionHover.material.map=this.conversionDotTexture;this.conversionHover.visible=false;this.conversionHover.renderOrder=26;
+    this.conversion.add(this.conversionPaths,this.conversionNodes,this.conversionMissing,this.conversionHover);
     this.conversion.visible=false;this.pathScene.add(this.conversion);
     this.conversionTooltip.className='tc-node-tooltip';this.conversionTooltip.hidden=true;
     this.conversionTooltip.setAttribute('role','status');this.host.append(this.conversionTooltip);
@@ -96,6 +139,7 @@ export class Viewer {
     this.renderer.domElement.addEventListener('pointerdown', event => { down = [event.clientX, event.clientY];this.clearPathHover(); });
     this.renderer.domElement.addEventListener('pointermove',event=>{
       if(event.buttons) {this.clearPathHover();return;}
+      if(this.trial.visible) {this.inspectTrial(event.clientX,event.clientY);return;}
       if(this.conversion.visible) {this.inspectConversion(event.clientX,event.clientY);return;}
       const hit=this.pathPointAt(event.clientX,event.clientY);
       this.hoverPoint.visible=!!hit;this.renderer.domElement.style.cursor=hit?'pointer':'';
@@ -114,6 +158,7 @@ export class Viewer {
       this.controls.panSpeed=.3/this.camera.zoom;this.camera.updateProjectionMatrix();
     },{capture:true,passive:false});
     this.renderer.domElement.addEventListener('pointerup', event => {
+      if(this.trial.visible)return;
       if (event.button !== 0 || Math.hypot(event.clientX-down[0], event.clientY-down[1]) > 4) return;
       if(this.conversion.visible) {this.inspectConversion(event.clientX,event.clientY);return;}
       const rect = this.renderer.domElement.getBoundingClientRect();
@@ -155,20 +200,20 @@ export class Viewer {
       this.updateClipping();
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
-      if(this.pathScene.visible && (!this.pathBounds.isEmpty() || (this.conversion.visible && !this.conversionBounds.isEmpty()))) {
+      if(this.pathScene.visible && (!this.pathBounds.isEmpty() || (this.conversion.visible && !this.conversionBounds.isEmpty()) || (this.trial.visible && !this.trialBounds.isEmpty()))) {
         this.updatePathCamera();this.renderer.render(this.pathScene,this.pathCamera);
       }
       this.updateOrientation();
     });
   }
 
-  private clearPathHover() { this.hoverPoint.visible=false;this.renderer.domElement.style.cursor='';this.conversionTooltip.hidden=true; }
+  private clearPathHover() { this.hoverPoint.visible=false;this.hoverPoint.renderOrder=22;this.conversionHover.visible=false;this.renderer.domElement.style.cursor='';this.conversionTooltip.hidden=true; }
 
   private inspectConversion(clientX:number,clientY:number) {
     this.clearPathHover();if(!this.conversionNodes.visible)return;
     this.updatePathCamera();
     const rect=this.renderer.domElement.getBoundingClientRect(),projected=new THREE.Vector3();
-    let closest:{label:string;distance:number}|null=null;
+    let closest:{label:string;distance:number;position:THREE.Vector3}|null=null;
     for(const group of [this.conversionNodes,this.conversionMissing])for(const object of group.children)if(object instanceof THREE.Points){
       const positions=object.geometry.getAttribute('position');
       for(let index=0;index<positions.count;index++) {
@@ -176,12 +221,17 @@ export class Viewer {
         const distance=Math.hypot((projected.x+1)*rect.width/2-(clientX-rect.left),(1-projected.y)*rect.height/2-(clientY-rect.top));
         if(distance<=Math.max(8,this.conversionNodeSize) && (!closest || distance<closest.distance)) {
           const item=object.userData.items[index];
-          closest={distance,label:item.node_id!=null?`${item.component} · 节点 ${item.node_id}`:`${item.component} · 焊路 ${item.path_id} · 未匹配目标`};
+          const position=new THREE.Vector3().fromBufferAttribute(positions,index),xyz=position.clone().add(this.origin);
+          const label=item.node_id!=null
+            ?`${item.component} · 节点 ${item.node_id}\n${(item.segments ?? []).map((segment:{label:string})=>segment.label).join('、')}\n坐标（mm）：${xyz.toArray().map(value=>value.toFixed(3)).join('，')}`
+            :`${item.label} · 搜索范围内没有节点`;
+          closest={distance,label,position};
         }
       }
     }
     if(closest) {
       this.conversionTooltip.textContent=closest.label;this.conversionTooltip.hidden=false;
+      this.conversionHover.position.copy(closest.position);this.conversionHover.material.size=this.conversionNodeSize+4;this.conversionHover.visible=true;
       this.renderer.domElement.style.cursor='help';
     }
   }
@@ -209,6 +259,7 @@ export class Viewer {
     this.camera.updateMatrixWorld();this.pathCamera.copy(this.camera);
     const box=this.pathBounds.clone().union(this.trailBounds);
     if(this.conversion.visible) box.union(this.conversionBounds);
+    if(this.trial.visible) box.union(this.trialBounds);
     box.applyMatrix4(this.camera.matrixWorldInverse);
     const margin=Math.max(this.size*.05,1e-9);
     this.pathCamera.near=Math.max(1e-12,-box.max.z-margin);
@@ -297,11 +348,13 @@ export class Viewer {
   }
 
   clearModel() {
+    this.trialPickedPoint=null;this.trialPicked.visible=false;
     this.clearGroup(this.models);this.clearArrows();this.meshes=[];this.selected.clear();this.explosion=0;
     this.bounds.makeEmpty();this.hideWeldPreview();this.clearWeldTrails();this.clearPathHover();
   }
 
   load(data: MeshData) {
+    this.trialPickedPoint=null;this.trialPicked.visible=false;
     this.hideWeldPreview();
     this.clearWeldTrails();
     this.clearPathHover();
@@ -489,6 +542,8 @@ export class Viewer {
     material.transparent = material.opacity < 1;
     material.depthWrite = material.opacity === 1;
     material.needsUpdate = true;
+    if(this.trialContextMaterials.has(material))this.trialContextMaterials.set(material,{opacity:material.opacity,transparent:material.transparent,depthWrite:material.depthWrite});
+    this.updateTrialContext();
   }
   showEdges(visible: boolean) {
     this.setRenderMode(visible?'solid-edges':'solid');
@@ -634,10 +689,10 @@ export class Viewer {
   }
   showPaths(visible: boolean) {
     this.paths.visible=visible;this.weldTrails.visible=visible;
-    this.pathScene.visible=visible || this.conversion.visible;
+    this.pathScene.visible=visible || this.conversion.visible || this.trial.visible;
     if(!visible) this.clearPathHover();
   }
-  setConversion(paths: number[][][], nodes: number[][], items:{node_id:number;component:string}[]=[], missing:{xyz_mm:number[];component:string;path_id:number}[]=[]) {
+  setConversion(paths: number[][][], nodes: number[][], items:{node_id:number;component:string;segments?:{label:string}[]}[]=[], missing:{xyz_mm:number[];component:string;path_id:number;label:string}[]=[]) {
     this.clearGroup(this.conversionPaths);this.clearGroup(this.conversionNodes);this.clearGroup(this.conversionMissing);this.clearPathHover();
     this.conversionBounds.makeEmpty();
     for(const path of paths) {
@@ -650,13 +705,13 @@ export class Viewer {
       const points3d=nodes.map(xyz=>new THREE.Vector3().fromArray(xyz).sub(this.origin));
       points3d.forEach(point=>this.conversionBounds.expandByPoint(point));
       const geometry=new THREE.BufferGeometry().setFromPoints(points3d);
-      const points=new THREE.Points(geometry,new THREE.PointsMaterial({color:0x16859a,size:this.conversionNodeSize,sizeAttenuation:false,depthTest:false,depthWrite:false}));
+      const points=new THREE.Points(geometry,new THREE.PointsMaterial({color:0x16859a,size:this.conversionNodeSize,sizeAttenuation:false,depthTest:false,depthWrite:false,map:this.conversionDotTexture,transparent:true,alphaTest:.5}));
       points.userData.items=items;points.renderOrder=24;this.conversionNodes.add(points);
     }
     if(missing.length) {
       const positions=missing.map(item=>new THREE.Vector3().fromArray(item.xyz_mm).sub(this.origin));
       positions.forEach(point=>this.conversionBounds.expandByPoint(point));
-      const points=new THREE.Points(new THREE.BufferGeometry().setFromPoints(positions),new THREE.PointsMaterial({color:0xd94848,size:this.conversionNodeSize+2,sizeAttenuation:false,depthTest:false,depthWrite:false}));
+      const points=new THREE.Points(new THREE.BufferGeometry().setFromPoints(positions),new THREE.PointsMaterial({color:0xd94848,size:this.conversionNodeSize+2,sizeAttenuation:false,depthTest:false,depthWrite:false,map:this.conversionDotTexture,transparent:true,alphaTest:.5}));
       points.userData.items=missing;points.renderOrder=25;this.conversionMissing.add(points);
     }
   }
@@ -672,6 +727,105 @@ export class Viewer {
   showPathSelection(visible: boolean) {
     this.paths.visible=visible;
     if(!visible) this.clearPathHover();
+  }
+  showLocalTrial(visible:boolean) {
+    this.trial.visible=visible;this.models.visible=true;this.clearPathHover();
+    this.trialSurface.visible=visible&&this.trialData.previewReady;
+    this.updateTrialContext();this.updateTrialPicked();
+    this.pathScene.visible=visible||this.conversion.visible||this.paths.visible||this.weldTrails.visible;
+  }
+  private updateTrialContext() {
+    if(this.trial.visible&&this.trialData.previewReady){
+      this.models.traverse(object=>{
+        if(!(object instanceof THREE.Mesh || object instanceof THREE.Line))return;
+        for(const material of Array.isArray(object.material)?object.material:[object.material]){
+          if(!this.trialContextMaterials.has(material))this.trialContextMaterials.set(material,{opacity:material.opacity,transparent:material.transparent,depthWrite:material.depthWrite});
+          material.opacity=Math.min(this.trialContextMaterials.get(material)!.opacity,.14);
+          material.transparent=true;material.depthWrite=false;material.needsUpdate=true;
+        }
+      });
+    }else{
+      for(const [material,state] of this.trialContextMaterials){Object.assign(material,state);material.needsUpdate=true;}
+      this.trialContextMaterials.clear();
+    }
+  }
+  localTrialSelection(mode:string,callback:(ids:number[],path?:number,point?:number)=>void) {this.trialMode=mode;this.trialPick=callback;this.clearPathHover();this.updateTrialPicked();}
+  setLocalTrial(data:TrialOverlay) {
+    const surfaceChanged=data.nodes!==this.trialData.nodes||data.faces!==this.trialData.faces||data.previewReady!==this.trialData.previewReady;
+    this.trialData=data;this.clearGroup(this.trial);this.trialBounds.copy(this.trialSurfaceBounds);this.clearPathHover();
+    const position=(xyz:number[])=>{const p=new THREE.Vector3().fromArray(xyz).sub(this.origin);this.trialBounds.expandByPoint(p);return p;};
+    if(surfaceChanged){
+      this.clearGroup(this.trialSurface);this.trialBounds.makeEmpty();
+      const nodes=new Map(data.nodes.map(node=>[node.id,node.xyz_mm]));
+      const surface:number[]=[];
+      if(data.previewReady)for(const face of data.faces){const points=face.node_ids.map(id=>nodes.get(id));if(points.some(p=>!p))continue;for(let index=1;index<points.length-1;index++)for(const point of [points[0],points[index],points[index+1]])surface.push(...position(point!).toArray());}
+      if(data.previewReady&&surface.length){
+        const geometry=new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(surface,3));geometry.computeVertexNormals();
+        const mesh=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0x9cbbc8,roughness:.72,metalness:.08,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2}));
+        this.trialSurface.add(mesh);
+      }
+      this.trialSurfaceBounds.copy(this.trialBounds);
+    }
+    for(const path of data.paths){
+      const points=path.points_mm.map(position),geometry=new LineGeometry().setPositions(points.flatMap(point=>point.toArray()));
+      const material=new LineMaterial({color:path.color,linewidth:path.width??(path.selected?3:1.5),depthTest:false,depthWrite:false});
+      material.resolution.set(this.host.clientWidth,this.host.clientHeight);
+      const line=new Line2(geometry,material);line.renderOrder=path.id<0?24:path.selected?23:21;this.trial.add(line);
+      if(path.id>=0){const dots=new THREE.Points(new THREE.BufferGeometry().setFromPoints(points),new THREE.PointsMaterial({color:path.color,size:path.selected?7:5,sizeAttenuation:false,map:this.conversionDotTexture,transparent:true,alphaTest:.5,depthTest:false,depthWrite:false}));dots.renderOrder=25;this.trial.add(dots);}
+    }
+    const selected=new Set(data.selected);
+    for(const active of [false,true]){
+      if(!data.showNodes&&!active)continue;
+      const geometry=new THREE.BufferGeometry().setFromPoints(data.nodes.filter(n=>selected.has(n.id)===active).map(n=>position(n.xyz_mm)));
+      const dots=new THREE.Points(geometry,new THREE.PointsMaterial({color:active?0xff8b22:0x187b95,size:active?9:5,sizeAttenuation:false,map:this.conversionDotTexture,transparent:true,alphaTest:.5,depthTest:false,depthWrite:false}));dots.renderOrder=active?27:24;this.trial.add(dots);
+    }
+    if(data.box){const box=new THREE.Box3(position(data.box.min),position(data.box.max));const helper=new THREE.Box3Helper(box,0x178db0);for(const material of Array.isArray(helper.material)?helper.material:[helper.material])material.depthTest=false;this.trial.add(helper);}
+    this.trialSurface.visible=this.trial.visible&&data.previewReady;this.updateTrialContext();this.updateTrialPicked();
+  }
+  private updateTrialPicked() {
+    const selected=this.trialPickedPoint,path=selected?this.trialData.paths.find(path=>path.id===selected.path):null;
+    const xyz=path&&selected?path.points_mm[selected.point]:null;
+    this.trialPicked.visible=this.trial.visible&&this.trialMode==='path'&&!!xyz;
+    if(xyz)this.trialPicked.position.fromArray(xyz).sub(this.origin);
+    else this.trialPickedPoint=null;
+  }
+  private trialPointAt(clientX:number,clientY:number) {
+    this.updatePathCamera();const rect=this.renderer.domElement.getBoundingClientRect();
+    let nearest:{id:number;path?:number;point?:number;position:THREE.Vector3;distance:number;selected:boolean}|null=null;
+    const consider=(xyz:number[],id:number,path?:number,point?:number,selected=false)=>{
+      const position=new THREE.Vector3().fromArray(xyz).sub(this.origin),p=position.clone().project(this.pathCamera);
+      const distance=Math.hypot(rect.left+(p.x+1)*rect.width/2-clientX,rect.top+(1-p.y)*rect.height/2-clientY);
+      if(Math.abs(p.z)<=1&&distance<12&&(!nearest||distance<nearest.distance-.25||(Math.abs(distance-nearest.distance)<=.25&&selected&&!nearest.selected)))nearest={id,path,point,position,distance,selected};
+    };
+    if(this.trialMode==='path'){for(const path of this.trialData.paths)if(path.id>=0)path.points_mm.forEach((xyz,index)=>consider(xyz,0,path.id,index,!!path.selected));}
+    else if(this.trialMode==='node'&&this.trialData.showNodes)for(const node of this.trialData.nodes)consider(node.xyz_mm,node.id);
+    return nearest as {id:number;path?:number;point?:number;position:THREE.Vector3;distance:number;selected:boolean}|null;
+  }
+  private inspectTrial(clientX:number,clientY:number) {
+    this.clearPathHover();const hit=this.trialPointAt(clientX,clientY);
+    if(hit){this.hoverPoint.position.copy(hit.position);this.hoverPoint.visible=true;this.hoverPoint.renderOrder=29;this.renderer.domElement.style.cursor='pointer';}
+  }
+  private pickTrial(start:number[],end:number[]) {
+    this.updatePathCamera();const rect=this.renderer.domElement.getBoundingClientRect();
+    const project=(xyz:number[])=>{const p=new THREE.Vector3().fromArray(xyz).sub(this.origin).project(this.pathCamera);return [rect.left+(p.x+1)*rect.width/2,rect.top+(1-p.y)*rect.height/2,p.z];};
+    if(this.trialMode==='box'){
+      const ids=this.trialData.nodes.filter(n=>{const p=project(n.xyz_mm);return Math.abs(p[2])<=1 && p[0]>=Math.min(start[0],end[0]) && p[0]<=Math.max(start[0],end[0]) && p[1]>=Math.min(start[1],end[1]) && p[1]<=Math.max(start[1],end[1]);}).map(n=>n.id);this.trialPick?.(ids);return;
+    }
+    if(this.trialMode==='face'){
+      const nodes=new Map(this.trialData.nodes.map(n=>[n.id,n.xyz_mm]));let nearest:number[]|null=null,depth=Infinity;
+      for(const face of this.trialData.faces){
+        const xyz=face.node_ids.map(id=>nodes.get(id));if(xyz.some(p=>!p))continue;
+        const points=xyz.map(p=>new THREE.Vector3().fromArray(p!).sub(this.origin));
+        this.raycaster.setFromCamera(new THREE.Vector2((end[0]-rect.left)/rect.width*2-1,1-(end[1]-rect.top)/rect.height*2),this.pathCamera);
+        for(let i=1;i<points.length-1;i++){const hit=this.raycaster.ray.intersectTriangle(points[0],points[i],points[i+1],false,new THREE.Vector3());if(hit){const distance=hit.distanceTo(this.raycaster.ray.origin);if(distance<depth){depth=distance;nearest=face.node_ids;}}}
+      }
+      if(nearest)this.trialPick?.(nearest);return;
+    }
+    const hit=this.trialPointAt(end[0],end[1]);
+    if(hit){
+      if(hit.path!==undefined&&hit.point!==undefined){this.trialPickedPoint={path:hit.path,point:hit.point};this.updateTrialPicked();}
+      this.trialPick?.(hit.path===undefined?[hit.id]:[],hit.path,hit.point);
+    }
   }
   fitPaths() {
     if(this.pathBounds.isEmpty()) return;

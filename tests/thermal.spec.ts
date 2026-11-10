@@ -1,60 +1,82 @@
-import {test,expect,type Page} from '@playwright/test';
+import {test,expect} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
 
-async function overlayPixels(page:Page) {
-  return page.locator('#viewport canvas').evaluate(canvas=>new Promise<{paths:number,nodes:number}>(resolve=>requestAnimationFrame(()=>{
-    const context=(canvas as HTMLCanvasElement).getContext('webgl2')!;
-    const pixels=new Uint8Array(context.drawingBufferWidth*context.drawingBufferHeight*4);
-    context.readPixels(0,0,context.drawingBufferWidth,context.drawingBufferHeight,context.RGBA,context.UNSIGNED_BYTE,pixels);
-    let paths=0,nodes=0;
-    for(let index=0;index<pixels.length;index+=4) {
-      const red=pixels[index],green=pixels[index+1],blue=pixels[index+2];
-      if(red>150 && red>green*1.25 && green>blue*1.5) paths++;
-      if(green>red*2 && blue>red*2 && green>90 && blue>90) nodes++;
-    }
-    resolve({paths,nodes});
-  })));
-}
+test('未导入模型时保留全部热循环步骤并阻止后续操作',async({page})=>{
+  await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
+  await page.getByRole('button',{name:'转换至热循环模式',exact:true}).click();
+  await expect(page.locator('#tc-material')).toBeDisabled();
+  await expect(page.locator('#tc-export')).toBeVisible();
+  await expect(page.locator('#tc-export')).toBeDisabled();
+  await expect(page.locator('#tc-import-label')).toBeVisible();
+  await expect(page.locator('#tc-temperatures')).toBeDisabled();
+  await expect(page.locator('#tc-create')).toBeVisible();
+  await expect(page.locator('#tc-create')).toBeDisabled();
+});
 
-test('真实 DAT 预览、焊路开关、旧温度 CSV 拒绝和新模型清除',async({page})=>{
+test('真实 DAT 分段设置保留有效导出状态并拒绝节点不完整的 CSV',async({page})=>{
+  test.slow();
   const source=process.env.SFMARC_TEST_TC_DAT,temperatures=process.env.SFMARC_TEST_TC_CSV,material=process.env.SFMARC_TEST_TC_MATERIAL;
   test.skip(!source || !temperatures || !material,'需要实际 DAT、温度 CSV 与材料文件');
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto('/#token='+process.env.SFMARC_TEST_TOKEN);
   await page.getByRole('button',{name:'转换至热循环模式',exact:true}).click();
-  await expect(page.locator('#tc-export')).toBeDisabled();
-  await expect(page.locator('#tc-import-label')).toBeHidden();
   await page.locator('#open-model').click();await page.locator('#import-units').selectOption('m');
+  const prepared=page.waitForResponse(response=>response.url().endsWith('/api/thermal') && response.request().method()==='POST');
   await page.locator('#file').setInputFiles(source!);
+  const initial=await (await prepared).json();
   await expect(page.locator('#busy')).toBeHidden({timeout:90000});
   await expect(page.locator('#tc-source')).toContainText('4 条焊路');
   await expect(page.locator('#explode')).toBeDisabled();
   await expect(page.locator('#tc-path-list .tc-path-row')).toHaveCount(4);
-  await expect.poll(async()=>(await overlayPixels(page)).nodes).toBeGreaterThan(200);
+  await expect(page.locator('#tc-path-list .tc-path-name')).toHaveText(['焊路 1','焊路 2','焊路 3','焊路 4']);
+  for(const path of initial.paths)await expect(page.locator('.thermal-panel')).not.toContainText(String(path.id));
+  expect(await page.locator('.thermal-panel').evaluate(panel=>panel.scrollWidth<=panel.clientWidth)).toBe(true);
+  await expect(page.locator('#tc-export')).toBeDisabled();
+  await expect(page.locator('#tc-material')).toBeEnabled();
+  await page.locator('#tc-material').setInputFiles(material!);
+  await expect(page.locator('#busy')).toBeHidden();
+  await expect(page.locator('#tc-material-source')).toContainText('C19000');
+  await expect(page.locator('#tc-export')).toBeEnabled();
+  await page.locator('#tc-display > summary').click();
   await page.locator('#tc-nodes-visible').uncheck();
-  await expect.poll(async()=>(await overlayPixels(page)).paths).toBeGreaterThan(200);
+  await expect(page.locator('#tc-nodes-visible')).not.toBeChecked();
   await page.locator('#tc-paths-visible').uncheck();
-  await expect.poll(async()=>(await overlayPixels(page)).paths).toBeLessThan(20);
-  await page.locator('#tc-nodes-visible').check();
-  await expect.poll(async()=>(await overlayPixels(page)).nodes).toBeGreaterThan(200);
-  await page.locator('#tc-paths-visible').check();
+  await expect(page.locator('#tc-paths-visible')).not.toBeChecked();
+  await page.locator('#tc-nodes-visible').check();await page.locator('#tc-paths-visible').check();
   const exportDownload=page.waitForEvent('download');await page.locator('#tc-export').click();
   const exporter=await exportDownload;expect(exporter.suggestedFilename()).toBe('export_node_temperatures.py');
   expect(await readFile((await exporter.path())!,'utf8')).toContain('SolverNodeID');
-  await expect(page.locator('#tc-import-label')).toBeVisible();
+  await expect(page.locator('#tc-temperatures')).toBeEnabled();
+  const first=page.locator('#tc-path-list .tc-path-row').first();
+  const resampled=page.waitForResponse(response=>response.url().endsWith('/api/thermal/resample'));
+  await first.locator('select').selectOption('count');await first.locator('input').fill('3');
+  await expect(page.locator('#tc-temperatures')).toBeDisabled();
+  const updated=await (await resampled).json();
+  expect(updated.paths[0].segments).toHaveLength(3);
+  expect(updated.nodes.map((node:{component:string,node_id:number})=>[node.component,node.node_id])).toEqual(initial.nodes.map((node:{component:string,node_id:number})=>[node.component,node.node_id]));
+  expect(updated.exported).toBe(true);
+  await expect(first.locator('.tc-path-summary')).toContainText('3 段');
+  await expect(page.locator('#tc-temperatures')).toBeEnabled();
+  await first.locator('input').fill('0');
+  await expect(page.locator('#tc-sampling-status')).toContainText('正整数');
+  await expect(page.locator('#tc-export')).toBeDisabled();
+  const recovered=page.waitForResponse(response=>response.url().endsWith('/api/thermal/resample'));
+  await first.locator('input').fill('4');await recovered;
+  await expect(first.locator('.tc-path-summary')).toContainText('4 段');
+  await expect(page.locator('#tc-temperatures')).toBeEnabled();
+  const imported=page.waitForResponse(response=>response.url().endsWith('/api/thermal/temperatures'));
   await page.locator('#tc-temperatures').setInputFiles(temperatures!);
+  expect((await imported).status()).toBe(400);
   await expect(page.locator('#busy')).toBeHidden({timeout:90000});
   await expect(page.locator('#message')).toContainText(/节点|组件/);
-  await expect(page.locator('#tc-settings')).toBeHidden();
-  await expect(page.locator('#tc-temperature-summary')).toBeHidden();
+  await expect(page.locator('#tc-create')).toBeDisabled();
+  await expect(page.locator('#tc-temperature-summary')).toContainText('尚未导入');
+  await expect(page.locator('#tc-curves')).toBeEmpty();
   const sourceSummary=await page.locator('#tc-source').textContent();
   await page.locator('#tool-welding').click();await page.locator('#tool-thermal-cycle').click();
   await expect(page.locator('#tc-source')).toHaveText(sourceSummary!);
-  await expect(page.locator('#tc-settings')).toBeHidden();
-  await expect(page.locator('#tc-export')).toBeEnabled();
-  const chooser=page.waitForEvent('filechooser');await page.locator('#open-model').click();await chooser;
-  await expect(page.locator('#model-dialog')).toBeHidden();
-  await expect(page.locator('#tc-settings')).toBeHidden();
-  await expect(page.locator('#tc-export')).toBeEnabled();
+  await expect(page.locator('#tc-material-source')).toContainText('C19000');
+  await expect(page.locator('#tc-temperatures')).toBeEnabled();
+  await expect(page.locator('#tc-create')).toBeDisabled();
   expect(errors).toEqual([]);
 });
