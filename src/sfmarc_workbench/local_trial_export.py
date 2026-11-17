@@ -15,7 +15,7 @@ from .templates.local_trial_paths import weld_lines
 
 def export_local_trial(trial, data):
     if data["model_id"] != trial.model_id:
-        raise ValueError("模型已更新，请重新设置局部试算")
+        raise ValueError("模型已更新，请重新设置固有应变法")
     if any(group["model_id"] != trial.model_id for group in data["groups"]):
         raise ValueError("试算组的来源模型已更新，请重新设置该组")
     config = {"source_process": trial.plan["source_process"],

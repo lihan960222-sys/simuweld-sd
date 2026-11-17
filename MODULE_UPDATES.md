@@ -7,7 +7,7 @@
 | `modules/face_load` | 面载荷 |
 | `modules/weld_paths` | 生成焊路、热源设置 |
 | `modules/thermal_cycle` | 热循环转换 |
-| `modules/local_trial` | 局部试算 |
+| `modules/local_trial` | 固有应变法 |
 | `shared` | 模型读取、公共视窗、启动与公共接口 |
 
 每个模块目录包含 `module.json`、`backend` 和 `web`。模板保存在所属模块的 `backend/templates`。请完整覆盖整个模块目录，保持文件层级。模块 ZIP 已包含 `modules/功能名称` 路径，解压目标选择软件根目录。
