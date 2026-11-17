@@ -156,7 +156,7 @@ const workspaceTools: WorkspaceTool[] = [
   {id:'model', label:'模型查看'},
   {id:'welding', label:'生成焊路'},
   {id:'surface-load', label:'面载荷', activate:faceLoad.activate, pick:faceLoad.pick},
-  {id:'local-trial', label:'局部试算'},
+  {id:'local-trial', label:'固有应变法'},
   {id:'thermal-cycle', label:'转换至热循环模式'},
 ];
 for (const tool of workspaceTools) {

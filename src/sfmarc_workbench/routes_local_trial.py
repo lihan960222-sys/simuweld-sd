@@ -60,7 +60,7 @@ def register(app, load_model):
         model = load_model(request)
         value = app.state.local_trial
         if value is None or value.model is not model:
-            raise HTTPException(409, "请读取当前模型的局部试算焊路")
+            raise HTTPException(409, "请读取当前模型的固有应变法焊路")
         return value
 
     @app.post("/api/local-trial")
@@ -76,7 +76,7 @@ def register(app, load_model):
     async def preview_local_trial(request: Request, data: LocalTrialSpec):
         value = selected_trial(request)
         if data.model_id != value.model_id:
-            raise HTTPException(409, "模型单位或模型已更新，请重新设置局部试算")
+            raise HTTPException(409, "模型单位或模型已更新，请重新设置固有应变法")
         result = await run_in_threadpool(value.preview, data.model_dump(exclude_none=True))
         if app.state.model is not value.model or app.state.local_trial is not value:
             raise HTTPException(409, "模型已更新，请重新预览")
