@@ -101,6 +101,7 @@ class SurfaceModel:
             progress("识别实体连接")
         graph = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(len(elements), len(elements))).tocsr()
         _, cell_bodies = connected_components(graph, directed=False)
+        self.element_bodies = {element[0]: int(body) for element, body in zip(elements, cell_bodies)}
         records = list(shared.values())
         if progress is not None:
             progress("计算表面", 0, len(records), "个面")

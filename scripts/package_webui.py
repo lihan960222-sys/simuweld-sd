@@ -12,7 +12,7 @@ source = args.source.resolve()
 files = [source / "SIMUWELD-SD-Web.exe", source / "使用说明.md", source / "模块更新说明.md"]
 files.extend(path for path in (source / "_internal").rglob("*") if path.is_file())
 for folder in (source / "shared", *(source / "modules" / name for name in
-                                   ("face_load", "weld_paths", "thermal_cycle", "local_trial"))):
+                                   ("face_load", "weld_paths", "thermal_cycle", "local_trial", "inherent_strain"))):
     manifest = json.loads((folder / "module.json").read_text(encoding="utf-8"))
     files.append(folder / "module.json")
     files.extend(folder / name for name in manifest["files"])

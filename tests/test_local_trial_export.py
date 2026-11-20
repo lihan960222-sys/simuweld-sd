@@ -2,6 +2,7 @@ from io import BytesIO, StringIO
 import json
 from pathlib import Path
 from zipfile import ZipFile
+import ast
 
 import numpy as np
 import pytest
@@ -12,12 +13,12 @@ from sfmarc_workbench.deck import Deck
 from sfmarc_workbench.geometry import SurfaceModel
 from sfmarc_workbench.local_trial import LocalTrial, _arcs, _slice
 from sfmarc_workbench.local_trial_export import export_local_trial
+from reference_data import reference_path
 
 
 @pytest.fixture(scope="module")
 def trial():
-    source = Path.home() / "Downloads" / "C0002.dat"
-    assert source.is_file(), "需要真实 Downloads/C0002.dat"
+    source = reference_path('SFMARC_TEST_C0002_DAT')
     return LocalTrial(SurfaceModel(Deck({source.name: source.read_bytes()}, source.name)), "m")
 
 
@@ -43,7 +44,9 @@ def test_actual_zip_bdf_roundtrip_and_config(trial):
         assert config["source_sha256"] == trial.model.deck.digest
         assert config["source_paths"] == trial.plan["paths"]
         assert "fixed_nodes_reference_xml" not in config
-        assert "create_local_trial.py" not in archive.namelist()
+        assert "create_local_case.py" in archive.namelist()
+        assert "case_manifest.json" in archive.namelist()
+        compile(archive.read('create_local_case.py'), 'create_local_case.py', 'exec')
         assert group["matches"] == [row for row in preview["matches"] if row["matched"]]
         assert group["selection"] == preview["selection"]
         for field in ("node_ids", "element_ids", "points_mm", "faces", "cut_faces"):
@@ -108,3 +111,32 @@ def test_actual_export_validates_script_config_before_download(trial):
     data["groups"][0]["name"] = " "
     with pytest.raises(ValueError, match="试算名称"):
         export_local_trial(trial, data)
+
+
+def test_actual_case_manifest_keeps_local_welding_intervals(trial):
+    data = configuration(trial)
+    with ZipFile(BytesIO(export_local_trial(trial, data))) as archive:
+        config = json.loads(archive.read('case_manifest.json'))
+        group = config['groups'][0]
+        assert group['events']
+        origin = min(row['start_s'] for row in group['matches'])
+        for event, match in zip(group['events'], sorted(group['matches'], key=lambda row: row['start_s'])):
+            assert event['start_s'] == pytest.approx(match['start_s'] - origin)
+            assert event['end_s'] == pytest.approx(match['end_s'] - origin)
+        assert config['cooling_limit_c'] == data['cooling_limit_c']
+
+
+def test_exported_case_script_clears_geometry_before_replacement(trial):
+    with ZipFile(BytesIO(export_local_trial(trial, configuration(trial)))) as archive:
+        tree = ast.parse(archive.read('create_local_case.py'))
+    assignments = sorted((node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                          and any(isinstance(target, ast.Attribute) and target.attr == 'geometry'
+                                  and isinstance(target.value, ast.Name) and target.value.id == 'body'
+                                  for target in node.targets)), key=lambda node: node.lineno)
+    assert len(assignments) == 2, '组件几何替换需要明确解除原关联，再指定新几何。'
+    assert isinstance(assignments[0].value, ast.Constant) and assignments[0].value.value is None
+    assert isinstance(assignments[1].value, ast.Name) and assignments[1].value.id == 'geometry'
+    removals = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and node.func.attr == 'delete_geometry']
+    assert len(removals) == 1
+    assert isinstance(removals[0].args[0], ast.Name) and removals[0].args[0].id == 'imported_geometry'

@@ -8,10 +8,14 @@ import numpy as np
 from .deck import Deck
 
 
-def read_weld_paths(deck: Deck, length_unit: str) -> dict:
+def read_weld_paths(deck: Deck, length_unit: str, power_scale_W: float | None = None) -> dict:
     if length_unit not in ("m", "mm"):
         raise ValueError("长度单位需要为 m 或 mm")
     scale = 1000.0 if length_unit == "m" else 1.0
+    if power_scale_W is None and length_unit == "m":
+        power_scale_W = 1.0
+    if power_scale_W is not None and (not np.isfinite(power_scale_W) or power_scale_W <= 0):
+        raise ValueError("功率到 W 的换算系数必须为有限正数")
     text = [line.text for line in deck.lines]
     iw, rw = deck.iw, 20 if deck.extended else 10
 
@@ -88,6 +92,8 @@ def read_weld_paths(deck: Deck, length_unit: str) -> dict:
                 and motion[7] == 1.2, f"热源 {ident} 的运动定义形式尚未支持")
         shape, cursor = record(cursor, f"8E{rw}.0")
         require(shape[0] > 0 and shape[1] > 0, f"热源 {ident} 的功率定义无效")
+        require(shape[2] >= 0 and shape[3] > 0 and shape[4] > 0 and shape[7] > 0
+                and (kind != 5 or min(shape[5:7]) > 0), f"热源 {ident} 的形状参数无效")
         tables, cursor = record(cursor, f"8I{iw}")
         require(tables[0] >= 0 and tables[1:] == [0] * 7,
                 f"热源 {ident} 的功率表定义形式尚未支持")
@@ -101,7 +107,14 @@ def read_weld_paths(deck: Deck, length_unit: str) -> dict:
         cursor = target_index + 1
         fluxes[ident] = {"name": name, "path": path_id, "kind": kind,
                          "speed": motion[5] * scale, "velocity": motion[6],
-                         "power": tables[0]}
+                         "power": tables[0], "source": {
+                             "id": ident, "name": name, "kind": kind,
+                             "power_W": None if power_scale_W is None else shape[0] * power_scale_W,
+                             "raw_power": shape[0], "power_scale_W": power_scale_W,
+                             "efficiency": shape[1], "gaussian": shape[2],
+                             "radius_mm": shape[3] * scale, "depth_mm": shape[4] * scale,
+                             "upper_radius_mm": shape[5] * scale,
+                             "lower_radius_mm": shape[6] * scale, "cutoff_mm": shape[7] * scale}}
         names.add(name)
 
     model_start = next((i for i, value in enumerate(text) if key(value) == "end"), -1)
@@ -142,6 +155,8 @@ def read_weld_paths(deck: Deck, length_unit: str) -> dict:
         flux["speed"] *= float(velocity[0, 1])
         require(np.isfinite(flux["speed"]) and flux["speed"] > 0, "热源速度无效")
         flux["interval"] = velocity[[0, -1], 0]
+        flux["source"]["power_table"] = (tables[flux["power"]].tolist() if flux["power"]
+                                           else [[float(value), 1.] for value in flux["interval"]])
 
     flux_by_name = {flux["name"]: flux for flux in fluxes.values()}
     referenced = set()
@@ -184,6 +199,7 @@ def read_weld_paths(deck: Deck, length_unit: str) -> dict:
             require(abs(path["length_mm"] / first["speed"] - duration) <= max(1e-4, duration * 1e-4),
                     f"焊路 {ident} 的长度、速度与持续时间不一致")
             path.update(speed_mm_s=float(first["speed"]), start_s=current_time, end_s=end_time)
+            path["sources"] = [flux["source"] for flux in active]
             active_paths.add(ident)
         current_time = end_time
     require(active_paths == set(paths) and referenced == names, "存在没有对应执行阶段的焊路或热源")

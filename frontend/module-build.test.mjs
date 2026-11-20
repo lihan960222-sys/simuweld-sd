@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'vite';
 
-test('四个模块保留独立资源、稳定导出和共享依赖',async()=>{
+test('五个模块保留独立资源、稳定导出和共享依赖',async()=>{
   const result=await build({logLevel:'error',build:{write:false}});
   assert.ok(!Array.isArray(result));
   const output=result.output;
@@ -11,6 +11,7 @@ test('四个模块保留独立资源、稳定导出和共享依赖',async()=>{
     weld_paths:['WeldingTool'],
     thermal_cycle:['ThermalTool'],
     local_trial:['LocalTrialTool'],
+    inherent_strain:['InherentStrainTool'],
   };
   for(const [id,exports] of Object.entries(expected)) {
     const base=`modules/${id}/${id}`;
@@ -24,8 +25,8 @@ test('四个模块保留独立资源、稳定导出和共享依赖',async()=>{
   }
   const common=output.find(item=>item.fileName==='shared/common.js');
   assert.equal(common?.type,'chunk');
-  for(const id of Object.keys(common.modules))assert.ok(!/\/(faceLoad|welding|heatSettings|weldTimeline|thermal|localTrial)\.ts$/.test(id));
+  for(const id of Object.keys(common.modules))assert.ok(!/\/(faceLoad|welding|heatSettings|weldTimeline|thermal|localTrial|inherentStrain)\.ts$/.test(id));
   for(const item of output) {
-    if(item.fileName.endsWith('.js')||item.fileName.endsWith('.css'))assert.match(item.fileName,/^(shared\/(index|common|vendor)|modules\/(face_load|weld_paths|thermal_cycle|local_trial)\/\3)\.(js|css)$/);
+    if(item.fileName.endsWith('.js')||item.fileName.endsWith('.css'))assert.match(item.fileName,/^(shared\/(index|common|vendor)|modules\/(face_load|weld_paths|thermal_cycle|local_trial|inherent_strain)\/\3)\.(js|css)$/);
   }
 });

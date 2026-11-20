@@ -10,6 +10,26 @@ test.beforeEach(async ({page}) => {
   await page.evaluate(async () => { await (window as any).ready; });
 });
 
+test('局部裁剪表面立即同步实体颜色、透明度与显示状态',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const viewer=(window as any).viewer;
+    const data=await(await fetch('/work/viewer-mesh.json')).json();
+    const faces=data.faces.map((node_ids:number[],index:number)=>({node_ids,body:data.body_ids[index]}));
+    const nodes=Array.from({length:data.points.length/3},(_,id)=>({id,xyz_mm:data.points.slice(id*3,id*3+3)}));
+    const overlay={paths:[],nodes,faces,selected:[],box:null,showNodes:false,previewReady:true};
+    viewer.setLocalTrial(overlay);viewer.showLocalTrial(true);
+    const body=faces[0].body,original=viewer.trialSurface.children.find((mesh:any)=>mesh.userData.body===body);
+    viewer.setBodyColor(body,'#ed3344');viewer.setBodyOpacity(body,.4);
+    const color=original.material.color.getHexString(),opacity=original.material.opacity;
+    viewer.showBody(body,false);const hidden=!original.visible;viewer.showBody(body,true);
+    const shown=original.visible,unchanged=original===viewer.trialSurface.children.find((mesh:any)=>mesh.userData.body===body);
+    viewer.setLocalTrial({...overlay,nodes:[...nodes]});
+    const rebuilt=viewer.trialSurface.children.find((mesh:any)=>mesh.userData.body===body);
+    return {color,opacity,hidden,shown,unchanged,rebuilt:rebuilt.material.color.getHexString()};
+  });
+  expect(result).toEqual({color:'ed3344',opacity:.4,hidden:true,shown:true,unchanged:true,rebuilt:'ed3344'});
+});
+
 test('未选中的路径点为灰色，选中范围包含端点且统一为黄色',async({page})=>{
   const colors=await page.evaluate(()=>{
     const viewer=(window as any).viewer;

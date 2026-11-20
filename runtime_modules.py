@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 import sys
 
 
-MODULES = ("face_load", "weld_paths", "thermal_cycle", "local_trial")
+MODULES = ("face_load", "weld_paths", "thermal_cycle", "local_trial", "inherent_strain")
 RUNTIME = "sd-web-1"
 INTERFACE = 1
 

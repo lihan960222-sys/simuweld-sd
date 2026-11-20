@@ -13,15 +13,24 @@ GROUPS = {
     "face_load": ["loads", "routes_face_load"],
     "weld_paths": ["welding", "weld_script", "routes_weld_paths"],
     "thermal_cycle": ["thermal", "sampling", "routes_thermal_cycle"],
-    "local_trial": ["local_trial", "local_trial_export", "routes_local_trial"],
+    "local_trial": ["local_trial", "local_trial_export", "routes_local_trial", "local_shell_results",
+                    "local_shell_equivalent", "local_result_archive", "local_abaqus_export", "local_conservative"],
+    "inherent_strain": ["plate_material", "plate_geometry", "plate_thermal", "plate_shell", "contact_geometry", "plate_structure", "plate_inherent",
+                        "plate_mechanics", "inherent_strain", "routes_inherent_strain"],
 }
 TEMPLATES = {"thermal_cycle": ["tc_create.py", "tc_export.py", "thermal_cycle_source.xml"],
-             "local_trial": ["local_trial_paths.py"]}
+             "local_trial": ["local_trial_paths.py", "local_trial_case.py", "local_results_export.py",
+                             "shell_mapping.py", "prepare_abaqus_model.py", "local_shell_loading.for", "export_abaqus_preview.py"]}
 
 
-def build(destination, version, archives=None):
+def build(destination, version, archives=None, only=None):
     destination = Path(destination).resolve()
+    selected = set(only or GROUPS)
+    if selected - GROUPS.keys():
+        raise ValueError("未知模块：" + ", ".join(sorted(selected - GROUPS.keys())))
     for ident, modules in GROUPS.items():
+        if ident not in selected:
+            continue
         folder = Path("shared" if ident == "shared" else "modules/" + ident)
         target = destination / folder
         files, python = {}, {}
@@ -41,6 +50,15 @@ def build(destination, version, archives=None):
             copy(SOURCE / "templates" / name, relative)
             if name.endswith(".py"):
                 python["sfmarc_workbench.templates." + name[:-3]] = relative
+        if ident == 'local_trial':
+            copy(ROOT / 'LOCAL_SHELL_GUIDE.txt', '使用说明.txt')
+            copy(ROOT / 'THIRD_PARTY_LOCAL_SHELL.txt', '第三方组件.txt')
+            dependencies = SOURCE / 'dependencies'
+            for source in sorted(dependencies.rglob('*')):
+                if source.is_file() and '__pycache__' not in source.parts and source.suffix != '.pyc':
+                    copy(source, 'backend/dependencies/' + source.relative_to(dependencies).as_posix())
+        if ident == 'inherent_strain':
+            copy(ROOT / 'docs' / 'INHERENT_PREVIEW.md', '使用说明.md')
         web = ROOT / "dist" / folder
         if not web.is_dir():
             raise ValueError("缺少网页模块构建结果：" + str(web))
@@ -67,5 +85,6 @@ if __name__ == "__main__":
     parser.add_argument("destination", type=Path)
     parser.add_argument("--version", default="0.9.1")
     parser.add_argument("--archives", type=Path)
+    parser.add_argument("--only", nargs="+", choices=GROUPS)
     args = parser.parse_args()
-    build(args.destination, args.version, args.archives)
+    build(args.destination, args.version, args.archives, args.only)

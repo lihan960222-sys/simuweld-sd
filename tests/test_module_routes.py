@@ -13,7 +13,7 @@ from sfmarc_workbench.server import create_app
     ("routes_weld_paths", {"/api/weld-paths", "/api/weld-script"}),
     ("routes_thermal_cycle", {"/api/thermal", "/api/thermal/resample", "/api/thermal/export",
                               "/api/thermal/temperatures", "/api/thermal/material", "/api/thermal/create"}),
-    ("routes_local_trial", {"/api/local-trial", "/api/local-trial/preview", "/api/local-trial/export"}),
+    ("routes_local_trial", {"/api/local-trial", "/api/local-trial/preview", "/api/local-trial/export", "/api/local-trial/results-script"}),
 ])
 def test_business_routes_are_registered_once_by_their_module(module, paths):
     app = create_app("module-routes")

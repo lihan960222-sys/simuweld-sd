@@ -1,0 +1,74 @@
+import {test,expect} from '@playwright/test';
+import {readFile} from 'node:fs/promises';
+import path from 'node:path';
+
+test('三个标签页与指定时刻导出脚本',async({page},testInfo)=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/#token=local-shell-real-data-check');
+  await page.locator('#tool-local-trial').click();
+  await expect(page.locator('.lt-tabs button')).toHaveCount(3);
+  await page.locator('[data-tab="results"]').click();
+  await expect(page.locator('#lt-results-process')).toBeVisible();
+  await expect(page.locator('#lt-start')).toBeHidden();
+  await page.locator('#lt-results-process').fill('C0003-Local');
+  await page.locator('#lt-results-final').fill('2.6');
+  const downloadPromise=page.waitForEvent('download');await page.locator('#lt-results-export').click();
+  const download=await downloadPromise,path=testInfo.outputPath('export_local_results.py');await download.saveAs(path);
+  const code=await readFile(path,'utf8');expect(code).toContain('select_checkpoints');expect(code).toContain("'final_time_s': 2.6");
+  await page.locator('[data-tab="abaqus"]').click();await expect(page.locator('#lt-abaqus-file')).toBeVisible();
+  await expect(page.locator('#lt-results-process')).toBeHidden();
+  await page.locator('[data-tab="results"]').click();await expect(page.locator('#lt-results-process')).toHaveValue('C0003-Local');
+  expect(errors).toEqual([]);
+});
+
+test('真实结果 ZIP 读取及代表长度自动更新',async({page})=>{
+  test.skip(!process.env.SFMARC_TEST_LOCAL_RESULTS||!process.env.SFMARC_TEST_LOCAL_ARCHIVE,'需要配置真实局部结果数据');
+  const root=process.env.SFMARC_TEST_LOCAL_RESULTS!;
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/#token=local-shell-real-data-check');await page.locator('#tool-local-trial').click();
+  await page.locator('[data-tab="results"]').click();
+  await page.locator('#lt-results-final').fill('2.6');
+  await page.locator('#lt-result-file').setInputFiles(process.env.SFMARC_TEST_LOCAL_ARCHIVE!);
+  await page.locator('#lt-result-dat').setInputFiles(path.join(root,'model/C0003-Local.dat'));
+  await page.locator('#lt-analyze').click();
+  await expect(page.locator('#lt-result-summary .lt-result-card')).toHaveCount(2,{timeout:120000});
+  await expect(page.locator('#lt-equivalent-export')).toBeEnabled();
+  await expect(page.locator('#lt-result-status')).toContainText('未达到');
+  const updated=page.waitForResponse(response=>response.url().endsWith('/api/local-trial/results-recompute'));
+  await page.locator('#lt-represent-length').fill('1.5');expect((await updated).ok()).toBe(true);
+  await expect(page.locator('#lt-result-summary .lt-result-card')).toHaveCount(2);
+  await expect(page.locator('#lt-equivalent-export')).toBeEnabled();
+  await page.locator('[data-tab="model"]').click();await page.locator('[data-tab="results"]').click();
+  await expect(page.locator('#lt-represent-length')).toHaveValue('1.5');
+  expect(errors).toEqual([]);
+});
+
+test('测试 INP 两板对应、两遍顺序及完整计算包导出',async({page},testInfo)=>{
+  test.skip(!process.env.SFMARC_TEST_LOCAL_RESULTS||!process.env.SFMARC_TEST_LOCAL_ARCHIVE,'需要配置真实局部结果数据');
+  const root=process.env.SFMARC_TEST_LOCAL_RESULTS!;
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/#token=local-shell-real-data-check');
+  await page.locator('#file').setInputFiles(path.join(root,'model/C0003-Local.dat'));
+  await page.locator('#tool-local-trial').click();
+  await expect(page.locator('#lt-paths .lt-path-row')).toHaveCount(2,{timeout:120000});
+  await page.locator('[data-tab="results"]').click();await page.locator('#lt-results-final').fill('2.6');
+  await page.locator('#lt-result-file').setInputFiles(process.env.SFMARC_TEST_LOCAL_ARCHIVE!);
+  await page.locator('#lt-result-dat').setInputFiles(path.join(root,'model/C0003-Local.dat'));
+  await page.locator('#lt-analyze').click();
+  await expect(page.locator('#lt-result-summary .lt-result-card')).toHaveCount(2,{timeout:120000});
+  await page.locator('[data-tab="abaqus"]').click();
+  await page.locator('#lt-abaqus-file').setInputFiles(path.join(root,'SD_TwoPlates_Test.inp'));
+  await page.locator('#lt-abaqus-read').click();
+  await expect(page.locator('[data-abaqus-body]')).toHaveCount(2,{timeout:60000});
+  await expect(page.locator('[data-abaqus-body]').first()).toHaveValue('');
+  await page.locator('[data-abaqus-body]').nth(0).selectOption('group_1_component_1');
+  await page.locator('[data-abaqus-body]').nth(1).selectOption('group_1_component_2');
+  await expect(page.locator('#lt-abaqus-paths .lt-path-row')).toHaveCount(2);
+  const downloadPromise=page.waitForEvent('download');await page.locator('#lt-abaqus-export').click();
+  const download=await downloadPromise;expect(await download.failure()).toBeNull();
+  await download.saveAs(testInfo.outputPath('actual-browser-test-abaqus.zip'));
+  await page.locator('#lt-abaqus-unit').selectOption('m');
+  await expect(page.locator('#lt-abaqus-status')).toContainText('重新读取');
+  await expect(page.locator('[data-abaqus-body]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

@@ -40,6 +40,7 @@ class BackgroundModel:
         self.filename = filename
         self.element_count = sum(len(block.data) for block in mesh.cells)
         dimensions = {block.dim for block in mesh.cells}
+        self.source_dimensions = dimensions
         if not dimensions or max(dimensions) < 2:
             raise ValueError("模型没有可显示的表面或体积单元")
         volume = [block for block in mesh.cells if block.dim == 3]

@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import secrets
 import sys
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -14,18 +15,32 @@ from starlette.datastructures import UploadFile
 from .deck import Deck, safe_path
 from .background import BackgroundModel
 from .geometry import SurfaceModel
-from . import routes_face_load, routes_weld_paths, routes_thermal_cycle, routes_local_trial
+from . import routes_face_load, routes_weld_paths, routes_thermal_cycle, routes_local_trial, routes_inherent_strain
 from .routes_thermal_cycle import TEMPERATURE_FILE_LIMIT
 
 
 def create_app(token: str):
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        routes_inherent_strain.cancel_current(app)
+        worker = getattr(app.state, 'inherent_worker', None)
+        if worker is not None and worker.thread is not None:
+            await run_in_threadpool(worker.thread.join)
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.model = None
     app.state.model_id = None
     app.state.importing = False
     app.state.import_progress = {"active": False, "stage": "", "completed": None, "total": None, "unit": ""}
     external = getattr(sys, "_sd_root", None)
     web = Path(external) / "shared" / "web" if external else Path(__file__).resolve().parents[2] / "dist"
+    module_manifests = {}
+    if external:
+        for name in sys._sd_versions:
+            folder = Path(external) / ("shared" if name == "shared" else "modules/" + name)
+            path = folder / "module.json"
+            module_manifests[path] = path.read_bytes()
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -38,6 +53,9 @@ def create_app(token: str):
             supplied = request.headers.get("x-session-token", "")
             if not secrets.compare_digest(supplied, token):
                 return JSONResponse({"detail": "请使用启动程序打开工具"}, status_code=401)
+            if request.url.path != "/api/modules" and any(
+                    not path.is_file() or path.read_bytes() != content for path, content in module_manifests.items()):
+                return JSONResponse({"detail": "软件模块文件已更新。请关闭 SIMUWELD SD 程序后重新启动；仅刷新网页无法加载新的后台模块。"}, status_code=409)
             length = request.headers.get("content-length")
             temperature_upload = request.url.path == "/api/thermal/temperatures"
             request_limit = TEMPERATURE_FILE_LIMIT + 1024**2 if temperature_upload else 512 * 1024 * 1024
@@ -98,6 +116,7 @@ def create_app(token: str):
         current(request)
         if app.state.importing:
             raise HTTPException(409, "模型正在读取，请稍候")
+        routes_inherent_strain.cancel_current(app)
         app.state.model = None
         app.state.model_id = None
         app.state.thermal = None
@@ -108,6 +127,7 @@ def create_app(token: str):
         if app.state.importing:
             raise HTTPException(409, "模型正在读取，请稍候")
         app.state.importing = True
+        routes_inherent_strain.cancel_current(app)
         import_progress("接收模型文件")
         try:
             async with request.form(max_files=512, max_fields=4, max_part_size=512*1024*1024) as form:
@@ -151,6 +171,7 @@ def create_app(token: str):
         if app.state.importing:
             raise HTTPException(409, "模型正在读取，请稍候")
         app.state.importing = True
+        routes_inherent_strain.cancel_current(app)
         import_progress("接收模型文件")
         try:
             async with request.form(max_files=1, max_fields=1, max_part_size=512*1024*1024) as form:
@@ -178,6 +199,7 @@ def create_app(token: str):
         return model
 
     routes_local_trial.register(app, load_model)
+    routes_inherent_strain.register(app, load_model)
     routes_thermal_cycle.register(app, load_model)
     routes_face_load.register(app, load_model)
     routes_weld_paths.register(app)
@@ -197,7 +219,7 @@ def create_app(token: str):
 
     app.mount("/assets", StaticFiles(directory=web / "assets", check_dir=False), name="assets")
     app.mount("/shared", StaticFiles(directory=web if external else web / "shared", check_dir=False), name="shared")
-    for ident in ("face_load", "weld_paths", "thermal_cycle", "local_trial"):
+    for ident in ("face_load", "weld_paths", "thermal_cycle", "local_trial", "inherent_strain"):
         folder = Path(external) / "modules" / ident / "web" if external else web / "modules" / ident
         app.mount("/modules/" + ident, StaticFiles(directory=folder, check_dir=False), name=ident)
     return app

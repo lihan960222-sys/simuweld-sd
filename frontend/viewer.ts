@@ -13,7 +13,17 @@ export type RenderMode = 'solid' | 'wireframe' | 'edges' | 'solid-edges';
 export interface PathData { id: number; points: number[][]; }
 export interface WeldTrailPath { points: number[][]; radius: number; direction: number[]; }
 export interface TrialNode { id:number; xyz_mm:number[]; }
-export interface TrialOverlay { paths:{id:number;points_mm:number[][];color:number;width?:number;selected?:boolean}[]; nodes:TrialNode[]; selected:number[]; faces:{node_ids:number[]}[]; box:{min:number[];max:number[]}|null; showNodes:boolean; previewReady:boolean; }
+export interface InherentGrid {
+  positions_mm:number[]; triangles:number[]; triangle_cells:number[]; cells:number[][];
+  outlines_mm:number[]; outline_layers:number[];
+  layers:{index:number;name:string;cell_count:number;area_mm2:number;thickness_mm:number[];bottom_mm:number;top_mm:number}[];
+  paths:{id:number;label?:string;points_mm:number[][];start_s:number;end_s:number;cooling_end_s:number;sources:Record<string,unknown>[]}[];
+  contacts:{lower:number;upper:number;gap_mm:number}[];cell_count:number;end_s:number;
+  basis:number[][];defaults:Record<string,number>;effective_grid:Record<string,number>;sources:Record<string,string>;
+  fixtures:{name:string;points_mm:number[]}[];
+  boundaries:{bodies:{name:string;kind:number;convection_h:number;emissivity:number;ambient_c:number;temperature_c:number}[]};
+}
+export interface TrialOverlay { paths:{id:number;points_mm:number[][];color:number;width?:number;selected?:boolean}[]; nodes:TrialNode[]; selected:number[]; faces:{node_ids:number[];body:number}[]; box:{min:number[];max:number[]}|null; showNodes:boolean; previewReady:boolean; independent?:boolean; }
 
 export class Viewer {
   private renderer = new THREE.WebGLRenderer({antialias: true});
@@ -26,6 +36,11 @@ export class Viewer {
   private orientationRotation = new THREE.Quaternion(0,0,0,0);
   private viewOffset = new THREE.Vector2();
   private models = new THREE.Group();
+  private inherent = new THREE.Group();
+  private inherentActive=false;
+  private inherentData:InherentGrid|null=null;
+  private inherentDeformed=false;
+  private inherentGridVisible=true;
   private arrows = new THREE.Group();
   private arrowFadeStart: number | null = null;
   private paths = new THREE.Group();
@@ -97,7 +112,9 @@ export class Viewer {
     this.scene.add(new THREE.HemisphereLight(0xf1f6ff, 0x617385, 2.5));
     const light = new THREE.DirectionalLight(0xffffff, 3);
     light.position.set(3, -4, 5);
-    this.scene.add(light, this.models, this.arrows, this.torch);
+    this.scene.add(light, this.models, this.arrows, this.torch, this.inherent);
+    this.models.name='model-entities';this.inherent.name='inherent-temperature';
+    this.inherent.visible=false;
     this.pathScene.add(this.weldTrails,this.paths,this.hoverPoint);
     const dot=document.createElement('canvas');dot.width=64;dot.height=64;
     const dotContext=dot.getContext('2d')!;dotContext.fillStyle='#ffffff';dotContext.beginPath();dotContext.arc(32,32,30,0,Math.PI*2);dotContext.fill();
@@ -299,6 +316,7 @@ export class Viewer {
     controls.minDistance = this.size * 0.55;
     controls.maxDistance = this.size * 20;
     controls.panSpeed=.3/this.camera.zoom;
+    controls.noRotate=this.inherentActive&&!this.inherentDeformed;
     controls.update();
     return controls;
   }
@@ -348,12 +366,16 @@ export class Viewer {
   }
 
   clearModel() {
+    this.setInherentGrid(null);
+    this.clearGroup(this.trialSurface);this.trialContextMaterials.clear();this.trialSurfaceBounds.makeEmpty();
     this.trialPickedPoint=null;this.trialPicked.visible=false;
     this.clearGroup(this.models);this.clearArrows();this.meshes=[];this.selected.clear();this.explosion=0;
     this.bounds.makeEmpty();this.hideWeldPreview();this.clearWeldTrails();this.clearPathHover();
   }
 
   load(data: MeshData) {
+    this.setInherentGrid(null);
+    this.clearGroup(this.trialSurface);this.trialContextMaterials.clear();this.trialSurfaceBounds.makeEmpty();
     this.trialPickedPoint=null;this.trialPicked.visible=false;
     this.hideWeldPreview();
     this.clearWeldTrails();
@@ -444,12 +466,18 @@ export class Viewer {
 
   fit(view = 'iso') {
     this.camera.zoom=1;this.camera.updateProjectionMatrix();this.clearPathHover();
+    if(this.inherentActive&&!this.inherentDeformed&&this.inherentData) {
+      this.setProjection('orthographic');
+      this.camera.up.fromArray(this.inherentData.basis[1]);
+      this.frame(new THREE.Vector3().fromArray(this.inherentData.basis[2]));return;
+    }
     const directions: Record<string, number[]> = {iso: [1,-1,0.85], xy: [0,0,1], xz: [0,-1,0], yz: [1,0,0]};
     this.camera.up.set(0, view === 'xy' ? 1 : 0, view === 'xy' ? 0 : 1);
     this.frame(new THREE.Vector3().fromArray(directions[view]).normalize());
   }
 
   recenter() {
+    if(this.inherentActive){this.fit();return;}
     this.updateBounds();
     if (this.bounds.isEmpty()) return;
     this.controls.dispose();
@@ -482,6 +510,11 @@ export class Viewer {
 
   private updateBounds() {
     this.bounds.makeEmpty();
+    if(this.inherentActive) {
+      for(const object of this.inherent.children)if(object instanceof THREE.Mesh&&object.visible){object.geometry.computeBoundingBox();this.bounds.union(object.geometry.boundingBox!);}
+      return;
+    }
+    if(this.trial.visible&&this.trialData.independent){this.bounds.copy(this.trialBounds);return;}
     for (const mesh of this.meshes) if (mesh.visible) this.bounds.union(mesh.geometry.boundingBox!.clone().translate(mesh.position));
     if (this.bounds.isEmpty() && this.pathScene.visible) this.bounds.copy(this.pathBounds);
   }
@@ -490,7 +523,7 @@ export class Viewer {
     if (this.bounds.isEmpty()) return;
     this.camera.updateMatrixWorld();
     this.viewBounds.copy(this.bounds);
-    for (const mesh of this.meshes) if (mesh.visible) this.viewBounds.union(mesh.geometry.boundingBox!.clone().translate(mesh.position));
+    if(!this.inherentActive)for (const mesh of this.meshes) if (mesh.visible) this.viewBounds.union(mesh.geometry.boundingBox!.clone().translate(mesh.position));
     if (this.torch.visible) {
       const radius=new THREE.Vector3().setScalar(this.heatExtent);
       this.viewBounds.union(new THREE.Box3(this.torch.position.clone().sub(radius),this.torch.position.clone().add(radius)));
@@ -525,6 +558,7 @@ export class Viewer {
 
   showBody(body: number, visible: boolean) {
     this.meshes.filter(mesh=>mesh.userData.body===body).forEach(mesh=>mesh.visible=visible);
+    this.updateTrialAppearance();
     this.arrows.children.filter(arrow=>arrow.userData.body===body).forEach(arrow=>arrow.visible=visible);
     this.updateBounds();
     this.updateClipping();
@@ -533,6 +567,7 @@ export class Viewer {
   setBodyColor(body: number, color: string) {
     this.meshes.find(mesh=>mesh.userData.body===body)!.userData.base.set(color);
     this.highlight([...this.selected]);
+    this.updateTrialAppearance();
   }
   setBodyOpacity(body: number, opacity: number) {
     const mesh = this.meshes.find(mesh=>mesh.userData.body===body)!;
@@ -544,6 +579,7 @@ export class Viewer {
     material.needsUpdate = true;
     if(this.trialContextMaterials.has(material))this.trialContextMaterials.set(material,{opacity:material.opacity,transparent:material.transparent,depthWrite:material.depthWrite});
     this.updateTrialContext();
+    this.updateTrialAppearance();
   }
   showEdges(visible: boolean) {
     this.setRenderMode(visible?'solid-edges':'solid');
@@ -729,7 +765,7 @@ export class Viewer {
     if(!visible) this.clearPathHover();
   }
   showLocalTrial(visible:boolean) {
-    this.trial.visible=visible;this.models.visible=true;this.clearPathHover();
+    this.trial.visible=visible;this.models.visible=!(visible&&this.trialData.independent);this.clearPathHover();
     this.trialSurface.visible=visible&&this.trialData.previewReady;
     this.updateTrialContext();this.updateTrialPicked();
     this.pathScene.visible=visible||this.conversion.visible||this.paths.visible||this.weldTrails.visible;
@@ -749,6 +785,18 @@ export class Viewer {
       this.trialContextMaterials.clear();
     }
   }
+  private updateTrialAppearance() {
+    if(this.trialData.independent)return;
+    for(const object of this.trialSurface.children){
+      const mesh=object as THREE.Mesh<THREE.BufferGeometry,THREE.MeshStandardMaterial>;
+      const source=this.meshes.find(item=>item.userData.body===mesh.userData.body)!;
+      mesh.material.color.copy(source.userData.base);
+      mesh.material.opacity=source.userData.opacity;
+      mesh.material.transparent=source.userData.opacity<1;
+      mesh.material.depthWrite=source.userData.opacity===1;
+      mesh.visible=source.visible;
+    }
+  }
   localTrialSelection(mode:string,callback:(ids:number[],path?:number,point?:number)=>void) {this.trialMode=mode;this.trialPick=callback;this.clearPathHover();this.updateTrialPicked();}
   setLocalTrial(data:TrialOverlay) {
     const surfaceChanged=data.nodes!==this.trialData.nodes||data.faces!==this.trialData.faces||data.previewReady!==this.trialData.previewReady;
@@ -757,13 +805,14 @@ export class Viewer {
     if(surfaceChanged){
       this.clearGroup(this.trialSurface);this.trialBounds.makeEmpty();
       const nodes=new Map(data.nodes.map(node=>[node.id,node.xyz_mm]));
-      const surface:number[]=[];
-      if(data.previewReady)for(const face of data.faces){const points=face.node_ids.map(id=>nodes.get(id));if(points.some(p=>!p))continue;for(let index=1;index<points.length-1;index++)for(const point of [points[0],points[index],points[index+1]])surface.push(...position(point!).toArray());}
-      if(data.previewReady&&surface.length){
+      const surfaces=new Map<number,number[]>();
+      if(data.previewReady)for(const face of data.faces){const points=face.node_ids.map(id=>nodes.get(id));if(points.some(p=>!p))continue;let surface=surfaces.get(face.body);if(!surface){surface=[];surfaces.set(face.body,surface);}for(let index=1;index<points.length-1;index++)for(const point of [points[0],points[index],points[index+1]])surface.push(...position(point!).toArray());}
+      for(const [body,surface] of surfaces){
         const geometry=new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(surface,3));geometry.computeVertexNormals();
         const mesh=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0x9cbbc8,roughness:.72,metalness:.08,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2}));
-        this.trialSurface.add(mesh);
+        mesh.userData.body=body;this.trialSurface.add(mesh);
       }
+      this.updateTrialAppearance();
       this.trialSurfaceBounds.copy(this.trialBounds);
     }
     for(const path of data.paths){
@@ -832,6 +881,107 @@ export class Viewer {
     this.pathScene.visible=true;this.camera.zoom=1;this.camera.updateProjectionMatrix();
     this.frame(this.camera.position.clone().sub(this.controls.target).normalize(),true);
   }
+  activateInherent(active:boolean) {
+    const changed=this.inherentActive!==active;
+    this.inherentActive=active;
+    this.inherent.visible=active && this.inherentData!==null;
+    this.models.visible=!(active || (this.trial.visible && this.trialData.independent));
+    this.controls.noRotate=active&&!this.inherentDeformed;
+    if(changed)this.fit();
+  }
+
+  setInherentGrid(data:InherentGrid|null) {
+    this.clearGroup(this.inherent);this.inherentData=data;this.inherentDeformed=false;
+    if(data) {
+      const local=(values:number[])=>values.map((value,index)=>value-this.origin.getComponent(index%3));
+      for(const layer of data.layers) {
+        const positions:number[]=[],cellIds:number[]=[],nodeIds:number[]=[],edges:number[]=[];
+        data.triangle_cells.forEach((cell,triangle)=>{
+          if(data.cells[cell][0]!==layer.index)return;
+          for(let vertex=0;vertex<3;vertex++) {
+            const node=data.triangles[triangle*3+vertex];
+            positions.push(...data.positions_mm.slice(node*3,node*3+3));cellIds.push(cell);nodeIds.push(node);
+          }
+        });
+        data.outline_layers.forEach((index,segment)=>{if(index===layer.index)edges.push(...data.outlines_mm.slice(segment*6,segment*6+6));});
+        const geometry=new THREE.BufferGeometry();
+        geometry.setAttribute('position',new THREE.Float32BufferAttribute(local(positions),3));
+        geometry.setAttribute('color',new THREE.Float32BufferAttribute(new Float32Array(positions.length).fill(.65),3));
+        const mesh=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:1,polygonOffsetUnits:1}));
+        mesh.userData={layer:layer.index,cellIds,nodeIds};
+        const outline=new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(local(edges),3)),new THREE.LineBasicMaterial({color:0x273c50,transparent:true,opacity:.55}));
+        outline.visible=this.inherentGridVisible;mesh.visible=layer.index===data.layers.at(-1)!.index;
+        mesh.add(outline);this.inherent.add(mesh);
+      }
+      for(const path of data.paths) {
+        const line=new THREE.Line(new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(local(path.points_mm.flat()),3)),new THREE.LineBasicMaterial({color:0xffa541,depthTest:false}));
+        line.userData={path:path.id};line.renderOrder=20;this.inherent.add(line);
+      }
+      for(const fixture of data.fixtures){
+        const line=new THREE.Line(new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(local(fixture.points_mm),3)),new THREE.LineDashedMaterial({color:0x8957bf,dashSize:.3,gapSize:.15,depthTest:false}));
+        line.computeLineDistances();line.userData={fixture:fixture.name};line.renderOrder=21;this.inherent.add(line);
+      }
+    }
+    this.activateInherent(this.inherentActive);
+    if(data&&this.inherentActive)this.fit();
+  }
+
+  setInherentTemperature(values:number[],minimum:number,maximum:number) {
+    if(!this.inherentData || values.length!==this.inherentData.cells.length)throw new Error('结果数量与网格单元数量不一致。');
+    if(!Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum<=minimum)throw new Error('图例上限必须大于下限。');
+    const color=new THREE.Color();
+    for(const object of this.inherent.children) {
+      if(!(object instanceof THREE.Mesh))continue;
+      const colors=object.geometry.getAttribute('color');
+      (object.userData.cellIds as number[]).forEach((cell,index)=>{
+        color.setHSL((1-THREE.MathUtils.clamp((values[cell]-minimum)/(maximum-minimum),0,1))*.66,.9,.53);
+        colors.setXYZ(index,color.r,color.g,color.b);
+      });
+      colors.needsUpdate=true;
+    }
+  }
+
+  setInherentDisplacement(displacement:number[]|null,scale=1) {
+    const data=this.inherentData;if(!data)return;
+    if(displacement===null&&!this.inherentDeformed)return;
+    if(!Number.isFinite(scale)||scale<0)throw new Error('变形显示倍率必须为非负数。');
+    if(displacement && (displacement.length!==data.positions_mm.length || displacement.some(value=>!Number.isFinite(value))))throw new Error('位移数据与显示网格不一致。');
+    for(const object of this.inherent.children) {
+      if(!(object instanceof THREE.Mesh))continue;
+      const positions=object.geometry.getAttribute('position');
+      (object.userData.nodeIds as number[]).forEach((node,index)=>{
+        const offset=node*3;
+        positions.setXYZ(index,
+          data.positions_mm[offset]+(displacement?.[offset]||0)*scale-this.origin.x,
+          data.positions_mm[offset+1]+(displacement?.[offset+1]||0)*scale-this.origin.y,
+          data.positions_mm[offset+2]+(displacement?.[offset+2]||0)*scale-this.origin.z);
+      });
+      positions.needsUpdate=true;object.geometry.computeBoundingSphere();object.geometry.computeBoundingBox();
+      object.children.forEach(outline=>outline.visible=displacement===null&&this.inherentGridVisible);
+    }
+    const changed=this.inherentDeformed!==(displacement!==null);
+    this.inherentDeformed=displacement!==null;
+    this.controls.noRotate=this.inherentActive&&!this.inherentDeformed;
+    if(changed)this.fit();else {this.updateBounds();this.updateClipping();}
+  }
+
+  showInherentGrid(visible:boolean) {
+    this.inherentGridVisible=visible;
+    for(const object of this.inherent.children)if(object instanceof THREE.Mesh)object.children.forEach(outline=>outline.visible=visible&&!this.inherentDeformed);
+  }
+
+  showInherentLayer(index:number,visible:boolean) {
+    this.inherent.children.filter(object=>object.userData.layer===index).forEach(object=>object.visible=visible);
+  }
+
+  showInherentPath(id:number,visible:boolean) {
+    this.inherent.children.filter(object=>object.userData.path===id).forEach(object=>object.visible=visible);
+  }
+
+  showInherentFixtures(visible:boolean) {
+    this.inherent.children.filter(object=>object.userData.fixture!==undefined).forEach(object=>object.visible=visible);
+  }
+
   private clearGroup(group: THREE.Group) {
     group.traverse(object => {
       if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points) {

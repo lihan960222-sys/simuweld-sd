@@ -1,0 +1,28 @@
+.inherent-panel { padding:18px;overflow:auto; }
+.inherent-panel h2 { margin:0 0 12px; }
+.is-run { position:sticky;top:-18px;z-index:3;background:var(--color-paper);padding:12px 0;border-bottom:1px solid var(--color-rule);display:grid;gap:8px; }
+.is-run button { display:flex;gap:7px;align-items:center;justify-content:center; }
+.is-run button svg { width:16px;height:16px; }
+.is-run .muted { margin:0; }
+#is-phases { display:flex;gap:6px;list-style:none;padding:0;margin:0;font-size:11px;justify-content:space-between;color:var(--color-muted); }
+#is-phases [aria-current=step] { color:var(--color-accent-hover);font-weight:700;border-bottom:2px solid var(--color-accent); }
+#is-progress { width:100%;height:10px;accent-color:var(--color-accent); }
+#is-clocks { font-size:11px;color:var(--color-muted);font-variant-numeric:tabular-nums; }
+.is-group { border-bottom:1px solid var(--border,#31414e);padding:12px 0; }
+.is-group>summary { cursor:pointer;font-weight:600; }
+.is-content { display:grid;gap:12px;padding-top:14px; }
+.is-content>label,.is-range label { display:grid;gap:6px;font-size:12px; }
+.is-content input[type=number] { width:100%;box-sizing:border-box; }
+.is-content .check,.is-layer { display:flex;align-items:flex-start;gap:8px; }
+.is-content .muted { font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7;margin:0; }
+.is-actions,.is-range { display:grid;grid-template-columns:1fr 1fr;gap:8px; }
+.is-content button { display:flex;gap:7px;align-items:center;justify-content:center; }
+.is-content button svg { width:15px;height:15px; }
+#is-status { white-space:pre-wrap;line-height:1.8;font-size:12px;overflow-wrap:anywhere; }
+#is-mechanical-status { white-space:pre-wrap;line-height:1.8;font-size:12px; }
+#is-layers,#is-paths { display:grid;gap:10px; }
+.is-layer { font-size:12px;line-height:1.7;white-space:pre-wrap; }
+#is-paths summary { display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px; }
+#is-paths p { padding:8px 0; }
+.is-legend { height:12px;border-radius:4px;background:linear-gradient(to right,#1931f3,#19e3f3,#19f34a,#e3f319,#f31919); }
+.inherent-panel input[type=file] { font-size:12px;max-width:100%; }

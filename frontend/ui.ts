@@ -1,4 +1,4 @@
-import { createElement, Plus, Save, Pencil, Trash2, X, Play, Pause, RotateCcw, ArrowLeftRight, MapPin, MapPinCheck, Route, GripVertical, Layers3, ListVideo, Eye, Upload, Download, Info, Boxes, Focus, SlidersHorizontal } from 'lucide';
+import { createElement, Plus, Save, Pencil, Trash2, X, Play, Pause, RotateCcw, ArrowLeftRight, MapPin, MapPinCheck, Route, GripVertical, Layers3, ListVideo, Eye, Upload, Download, Info, Boxes, Focus, SlidersHorizontal, Box, Scan, Thermometer, ArrowDownToLine } from 'lucide';
 
 const icons = {
   add: Plus, save: Save, edit: Pencil, delete: Trash2, close: X,
@@ -6,6 +6,7 @@ const icons = {
   start: MapPin, end: MapPinCheck, path: Route, grip: GripVertical,
   all: Layers3, playAll: ListVideo, eye: Eye, upload: Upload, download: Download,
   info: Info, explode: Boxes, focus: Focus, settings: SlidersHorizontal,
+  model: Box, trial: Scan, thermal: Thermometer, inherent: Layers3, pressure: ArrowDownToLine,
 };
 export type IconName = keyof typeof icons;
 export function setIcon(button: HTMLElement, name: IconName, label: string) {

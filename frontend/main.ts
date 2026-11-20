@@ -4,8 +4,9 @@ import { Viewer, type MeshData, type RenderMode } from './viewer';
 import { WeldingTool } from './welding';
 import { ThermalTool } from './thermal';
 import { LocalTrialTool } from './localTrial';
+import { InherentStrainTool } from './inherentStrain';
 import { setupSidebarResize } from './sidebarResize';
-import { setIcon, makeCollapsible } from './ui';
+import { setIcon, makeCollapsible, type IconName } from './ui';
 import { setupFaceLoad, faceLoadPanel, faceLoadSelection } from './faceLoad';
 import './design.css';
 
@@ -141,6 +142,7 @@ const welding = new WeldingTool(viewer, {api,run,message,unit:()=>'mm',hasModel:
 }});
 const thermal = new ThermalTool(viewer,{api,run,message,unit:()=>modelLengthUnit,changed:()=>window.addEventListener('beforeunload',confirmLeave)});
 const localTrial = new LocalTrialTool(viewer,{api,run,message,unit:()=>modelLengthUnit,changed:()=>window.addEventListener('beforeunload',confirmLeave)});
+const inherentStrain = new InherentStrainTool(viewer,{api,message,unit:()=>modelLengthUnit,modelId:()=>info?.id||'',changed:()=>window.addEventListener('beforeunload',confirmLeave)});
 makeCollapsible();
 function setModelUploadButton(replace=false) {
   const button=get('open-model');
@@ -157,28 +159,35 @@ const workspaceTools: WorkspaceTool[] = [
   {id:'welding', label:'生成焊路'},
   {id:'surface-load', label:'面载荷', activate:faceLoad.activate, pick:faceLoad.pick},
   {id:'local-trial', label:'局部试算'},
+  {id:'inherent-strain', label:'固有应变法'},
   {id:'thermal-cycle', label:'转换至热循环模式'},
 ];
 for (const tool of workspaceTools) {
-  const button=document.createElement('button'); button.textContent=tool.label; button.id='tool-'+tool.id;
+  const button=document.createElement('button'); button.id='tool-'+tool.id;
+  const icons:Record<string,IconName>={model:'model',welding:'path','surface-load':'pressure','local-trial':'trial','inherent-strain':'inherent','thermal-cycle':'thermal'};
+  setIcon(button,icons[tool.id],tool.label);button.classList.remove('icon-button');
+  const label=document.createElement('span');label.textContent=tool.label;button.append(label);
   button.onclick=()=>activateTool(tool); get('tools').append(button);
 }
 function activateTool(tool: WorkspaceTool) {
   if(busy || activeTool===tool) return;
   if(tool.id==='surface-load' && info?.supports_loads===false) {message('面载荷需要导入 Marc DAT 模型。');return;}
   activeTool=tool;
-  if(tool.id==='welding' || tool.id==='thermal-cycle' || tool.id==='local-trial') resetExplosion();
-  get<HTMLButtonElement>('explode').disabled=!info || tool.id==='welding' || tool.id==='thermal-cycle' || tool.id==='local-trial';
+  if(tool.id==='welding' || tool.id==='thermal-cycle' || tool.id==='local-trial' || tool.id==='inherent-strain') resetExplosion();
+  get<HTMLButtonElement>('explode').disabled=!info || tool.id==='welding' || tool.id==='thermal-cycle' || tool.id==='local-trial' || tool.id==='inherent-strain';
   document.querySelectorAll<HTMLElement>('[data-tool]').forEach(panel=>panel.hidden=panel.dataset.tool!==tool.id);
   document.querySelector('main')!.classList.toggle('has-tool-panel',!!document.querySelector('aside.right:not([hidden])'));
   workspaceTools.forEach(item=>get('tool-'+item.id).setAttribute('aria-pressed',String(item===tool)));
   viewer.highlight([]); viewer.clearArrows(); welding.activate(tool.id==='welding'); thermal.activate(tool.id==='thermal-cycle'); localTrial.activate(tool.id==='local-trial'); tool.activate?.(); updateExport();
+  inherentStrain.activate(tool.id==='inherent-strain');
+  document.querySelectorAll<HTMLElement>('[data-view],#projection,#render-mode,#explode').forEach(control=>control.hidden=tool.id==='inherent-strain');
+  if(tool.id!=='inherent-strain')viewer.setProjection(select('projection').value as 'perspective'|'orthographic');
   get('empty').hidden=!!info || (tool.id==='welding' && welding.hasPaths);
 }
 activateTool(workspaceTools[0]);
 
 function updateExport() {
-  get('export').hidden=activeTool?.id==='thermal-cycle' || activeTool?.id==='local-trial';
+  get('export').hidden=activeTool?.id==='thermal-cycle' || activeTool?.id==='local-trial' || activeTool?.id==='inherent-strain';
   if(activeTool?.id==='welding') {
     setIcon(get('export'),'download','导出 Python 脚本');
     get<HTMLButtonElement>('export').disabled=busy || !welding.canExport;
@@ -208,7 +217,7 @@ async function displayModel(next: ModelInfo, hasMesh: boolean) {
   await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
   mesh!.points=mesh!.points.map(value=>value*modelScale());
   viewer.load(mesh!); get('empty').hidden=true;
-  resetExplosion();get<HTMLButtonElement>('explode').disabled=activeTool.id==='welding' || activeTool.id==='thermal-cycle' || activeTool.id==='local-trial';
+  resetExplosion();get<HTMLButtonElement>('explode').disabled=activeTool.id==='welding' || activeTool.id==='thermal-cycle' || activeTool.id==='local-trial' || activeTool.id==='inherent-strain';
   setModelUploadButton(true);get('model-info-wrap').hidden=false;
   get('model-info').textContent=`${info.filename}\n${info.nodes.toLocaleString()} 节点\n${info.elements.toLocaleString()} 单元 · ${info.faces.toLocaleString()} 外表面`;
   get('body-count').textContent=String(info.bodies.length);
@@ -252,6 +261,7 @@ async function displayModel(next: ModelInfo, hasMesh: boolean) {
   faceLoad.reset(); welding.refresh();
   if(activeTool.id==='thermal-cycle')showImportProgress('正在计算焊路采样节点');
   await localTrial.modelChanged(info.supports_loads);
+  inherentStrain.modelChanged(info.supports_loads);
   await thermal.modelChanged(info.supports_loads);
 }
 

@@ -9,12 +9,12 @@ from sfmarc_workbench.geometry import SurfaceModel
 from sfmarc_workbench.local_trial import LocalTrial, _arcs, _box_intersects, _same_trace, _slice
 
 
-SOURCE = Path.home() / "Downloads" / "C0002.dat"
+from reference_data import reference_path
 
 
 @pytest.fixture(scope="module")
 def trial():
-    assert SOURCE.is_file(), "需要真实 Downloads/C0002.dat"
+    SOURCE = reference_path('SFMARC_TEST_C0002_DAT')
     return LocalTrial(SurfaceModel(Deck({SOURCE.name: SOURCE.read_bytes()}, SOURCE.name)), "m")
 
 
@@ -45,6 +45,11 @@ def test_actual_metadata_and_crop(trial):
     crop = result["crop"]
     assert crop["element_count"] < len(trial.elements)
     assert crop["cut_faces"]
+    selected_elements = set(crop["element_ids"])
+    for face in crop["faces"]:
+        owners = trial.face_owners[tuple(sorted(face["node_ids"]))]
+        owner = next(ident for ident, _, _ in owners if ident in selected_elements)
+        assert face["body"] == trial.model.element_bodies[owner]
     retained = set(crop["node_ids"])
     for element in crop["element_ids"]:
         assert set(trial.elements[element][1]).issubset(retained)

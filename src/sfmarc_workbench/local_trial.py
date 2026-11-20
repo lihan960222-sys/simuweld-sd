@@ -204,8 +204,8 @@ class LocalTrial:
         for owners in self.face_owners.values():
             retained = [owner for owner in owners if owner[0] in selected]
             if len(retained) == 1:
-                _, name, face = retained[0]
-                boundary.append({"node_ids": list(face), "component": name})
+                ident, name, face = retained[0]
+                boundary.append({"node_ids": list(face), "component": name, "body": self.model.element_bodies[ident]})
             if retained and len(retained) < len(owners):
                 for _, name, face in retained:
                     faces.append({"node_ids": list(face), "component": name})

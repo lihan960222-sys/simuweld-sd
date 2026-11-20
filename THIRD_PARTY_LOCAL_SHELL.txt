@@ -1,0 +1,9 @@
+局部结果处理使用的第三方组件
+
+pyuff 2.5.8：读取 Simufact 官方导出的 UNV 文件。
+Shapely 2.1.2：计算焊接影响区域与目标 shell 单元的面积交集。
+
+Windows 模块更新包包含上述原始发行文件，无需联网安装。
+对应许可保存在 local_trial/backend/dependencies 下各 *.dist-info/licenses 目录。
+NumPy、SciPy、meshioplusplus 使用现有 SIMUWELD SD 运行环境。
+生成的 Abaqus 脚本使用 Abaqus 自带 NumPy，面积交集已由 SD 预先计算。
