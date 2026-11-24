@@ -32,6 +32,7 @@ class JobInput(RevisionInput):
 
 class CalculationInput(JobInput):
     mechanics: bool = True
+    staged: bool = False
     dt_s: float | None = Field(default=None, gt=0, le=1)
     end_s: float | None = Field(default=None, gt=0)
     record_interval_s: float | None = Field(default=None, gt=0)
@@ -107,6 +108,7 @@ def register(app, load_model):
         app.state.inherent_revision = settings.revision
         app.state.inherent_material = (value, info)
         if job is not None:
+            job.reset_stages()
             job.frames = []
             job.peak = None
             job.mechanical_result = None
@@ -152,6 +154,26 @@ def register(app, load_model):
         job.material.enthalpy((job.preview['defaults']['initial_c'] if data.initial_c is None else data.initial_c) + 273.15)
         job.run(lambda: job.calculate(data.model_dump()), operation='calculate')
         return job.status()
+
+    @app.post('/api/inherent-strain/advance/{step}')
+    async def advance(request: Request, step: Literal['strain', 'displacement'], data: JobInput):
+        _, job = current(request, data.model_id, data.revision, data.job_id)
+        available(job)
+        required = 'thermal_done' if step == 'strain' else 'strain_done'
+        if job.state['status'] != required or data.revision != job.revision:
+            raise HTTPException(409, '请先完成上一阶段计算')
+        action = job.solve_strain if step == 'strain' else job.solve_staged_displacement
+        job.run(action, operation='calculate')
+        return job.status()
+
+    @app.get('/api/inherent-strain/strain')
+    async def strain(request: Request, job_id: str):
+        _, job = current(request, job_id=job_id)
+        state = job.strain_result
+        if state is None:
+            raise HTTPException(409, '尚无固有应变结果')
+        return dict(xx=state.plastic[:, 0].tolist(), yy=state.plastic[:, 1].tolist(),
+                    equivalent=state.equivalent.tolist())
 
     @app.post('/api/inherent-strain/cancel')
     async def cancel(request: Request, data: JobInput):

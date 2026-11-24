@@ -926,15 +926,17 @@ export class Viewer {
     if(data&&this.inherentActive)this.fit();
   }
 
-  setInherentTemperature(values:number[],minimum:number,maximum:number) {
-    if(!this.inherentData || values.length!==this.inherentData.cells.length)throw new Error('结果数量与网格单元数量不一致。');
+  setInherentTemperature(values:number[]|null,minimum:number,maximum:number) {
+    if(!this.inherentData&&!values)return;
+    if(!this.inherentData || (values&&values.length!==this.inherentData.cells.length))throw new Error('结果数量与网格单元数量不一致。');
     if(!Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum<=minimum)throw new Error('图例上限必须大于下限。');
     const color=new THREE.Color();
     for(const object of this.inherent.children) {
       if(!(object instanceof THREE.Mesh))continue;
       const colors=object.geometry.getAttribute('color');
       (object.userData.cellIds as number[]).forEach((cell,index)=>{
-        color.setHSL((1-THREE.MathUtils.clamp((values[cell]-minimum)/(maximum-minimum),0,1))*.66,.9,.53);
+        if(values)color.setHSL((1-THREE.MathUtils.clamp((values[cell]-minimum)/(maximum-minimum),0,1))*.66,.9,.53);
+        else color.setHex(0xb0c8c5);
         colors.setXYZ(index,color.r,color.g,color.b);
       });
       colors.needsUpdate=true;

@@ -26,6 +26,24 @@
 #is-paths p { padding:8px 0; }
 .is-legend { height:12px;border-radius:4px;background:linear-gradient(to right,#1931f3,#19e3f3,#19f34a,#e3f319,#f31919); }
 .inherent-panel input[type=file] { font-size:12px;max-width:100%; }
-.is-cases .is-content{display:grid;gap:4px;border-left:3px solid #b27843}
-.is-cases a{font-weight:650;color:#166359;text-underline-offset:3px}
-.is-cases small{color:#546866}
+
+aside.inherent-panel { padding:0 var(--space-md) var(--space-lg); scrollbar-gutter:stable; }
+.inherent-panel .is-head { padding:var(--space-lg) 0 var(--space-sm); display:flex;align-items:center;gap:8px; }
+.inherent-panel .is-head h2 { font-size:17px; margin:0; }
+.is-head svg { width:20px;height:20px;color:var(--color-accent-hover); }
+.is-import { margin-bottom:var(--space-md); }
+.is-import button { width:100%; min-height:36px; }
+.is-import p,.is-step p,.is-step small { color:var(--color-muted);font-size:12px;line-height:1.6;margin:0; }
+.is-import p { margin-top:5px; }
+.is-nav { display:grid;grid-template-columns:1fr 1.3fr 1fr;padding:3px;gap:2px;background:var(--color-panel);border:1px solid var(--color-rule);border-radius:var(--radius-panel); }
+.is-nav button { min-height:32px;border:1px solid transparent;background:transparent;font-size:13px;color:var(--color-muted); }
+.is-nav button[aria-pressed=true] { background:var(--color-elevated);color:var(--color-ink);border-color:var(--color-rule);box-shadow:0 1px 3px var(--color-shadow); }
+.inherent-panel .is-step { display:grid;gap:var(--space-sm);padding:var(--space-md) 0;border-bottom:1px solid var(--color-rule); }
+.is-step h3 { font-size:15px;margin:0 0 4px; }
+.is-step label { display:grid;gap:4px; }
+.is-step input::file-selector-button { border:0;background:var(--color-panel);color:var(--color-ink);padding:6px 10px;margin-right:8px; }
+.is-step .primary { min-height:36px; }
+.inherent-panel .is-run { position:static;border:1px solid var(--color-rule);background:var(--color-panel);padding:var(--space-sm) var(--space-md);margin:var(--space-sm) 0;border-radius:var(--radius-control);gap:3px; }
+.inherent-panel .is-group { padding:10px 0;border-bottom:1px solid var(--color-rule);font-size:13px; }
+.inherent-panel [hidden] { display:none!important; }
+.is-step button svg { width:15px;height:15px;vertical-align:middle;margin-right:5px; }

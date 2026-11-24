@@ -58,31 +58,54 @@ export class InherentStrainTool {
   private follow=true;
   private peak:number[]|null=null;
   private mechanics:MechanicsResult|null=null;
+  private strain:Record<string,number[]>|null=null;
+  private stage:'thermal'|'strain'|'displacement'='thermal';
+  private thermalInputsCurrent=false;
   private dirty=false;
   private applied:Record<string,number>={};
 
   constructor(private viewer:Viewer,private services:Services) {
     this.panel=document.createElement('aside');this.panel.className='right inherent-panel';this.panel.dataset.tool='inherent-strain';this.panel.hidden=true;
-    this.panel.innerHTML=`<h2>固有应变法</h2>
-      <details class="is-group is-cases"><summary>计算案例</summary><div class="is-content">
-        <a href="/modules/inherent_strain/c0004/index.html" target="_blank" rel="noopener">C0004 · 双板封边焊 ↗</a>
-        <small>25 °C 起焊 · 温度历程与松夹变形</small>
-      </div></details>
-      <p id="is-support" class="muted">请导入 Marc DAT 模型。</p>
-      <div class="is-run">
-        <ol id="is-phases" aria-label="计算阶段"><li data-phase="prepare">准备</li><li data-phase="thermal">热过程</li><li data-phase="cooling">冷却</li><li data-phase="structure">结构</li><li data-phase="complete">完成</li></ol>
-        <output id="is-status" role="status" aria-live="polite">等待导入 DAT</output>
-        <progress id="is-progress" aria-label="当前阶段进度"></progress>
-        <output id="is-clocks">计算尚未开始</output>
-        <div class="is-actions"><button id="is-start" class="primary">开始计算</button><button id="is-cancel">停止</button></div>
-        <p id="is-start-reason" class="muted"></p><button id="is-prepare" class="full">重新准备</button>
-      </div>
-      ${section('材料与二维模型',`<label class="is-upload">XMT 材料<input id="is-material" type="file" accept=".xmt"></label><p id="is-material-info" class="muted">请选择 XMT 材料。</p><label>显示板层<select id="is-layer" disabled></select></label><div id="is-layers" class="muted"></div><label class="check"><input id="is-grid" type="checkbox" checked>显示独立计算网格</label><label class="check"><input id="is-show-paths" type="checkbox" checked>显示焊路</label><label class="check"><input id="is-show-fixtures" type="checkbox" checked>显示夹具区域</label><p class="muted">温度采用固定二维视图。鼠标滚轮缩放，鼠标右键平移，顶部按钮适应窗口。</p>`,true)}
-      ${section('工艺详情','<p id="is-process" class="muted">导入后读取 DAT 热源、焊路、阶段时间与夹具位置。</p><div id="is-contacts" class="muted"></div><div id="is-paths"></div>')}
-      ${section('高级参数（可选）',`<p class="muted">参数自动填入。修改后点击应用参数；恢复默认值后同样需要应用。最大时间步长为上限，实际步长随热源运动和温度变化自动调整。</p>${fields.map(field).join('')}<div class="is-actions"><button id="is-apply">应用参数</button><button id="is-defaults">恢复默认值</button></div><output id="is-parameters" role="status">等待生成默认参数</output>`,false,'advanced')}
-      ${section('结果',`<label>温度显示<select id="is-view"><option value="frame">当前温度帧</option><option value="peak">历史最高温度</option></select></label><label>温度帧<input id="is-frame" aria-label="温度帧" type="range" min="0" max="0" value="0" disabled></label><output id="is-frame-time">尚无温度帧</output><label class="check"><input id="is-follow" type="checkbox" checked>跟随最新温度帧</label><output id="is-mechanical-status" role="status">尚无结构结果</output><label>显示结果<select id="is-mechanical-view" disabled><option value="temperature">温度</option><option value="displacement">法向位移 / mm</option><option value="peeq">等效塑性应变 PEEQ</option><option value="plastic-x">板面 X 方向塑性应变</option><option value="plastic-y">板面 Y 方向塑性应变</option></select></label><label>变形显示倍率<input id="is-deformation-scale" type="number" min="0" step="any" value="1" disabled></label><div class="is-legend"></div><output id="is-legend-unit">温度 / ℃</output><div class="is-range"><label>图例下限<input id="is-min" type="number" step="any" value="25" aria-describedby="is-legend-error"></label><label>图例上限<input id="is-max" type="number" step="any" value="1500" aria-describedby="is-legend-error"></label></div><output id="is-legend-error" role="status"></output><button id="is-export" class="full">导出计算结果 ZIP</button>`,true)}`;
+    this.panel.innerHTML=`<div class="is-head"><h2>固有应变法</h2></div>
+      <div class="is-import"><button id="is-import">导入 DAT 模型</button><p id="is-support">读取板件、焊路与夹具</p></div>
+      <nav class="is-nav" aria-label="计算步骤">
+        <button data-stage="thermal" aria-pressed="true">温度</button><button data-stage="strain" aria-pressed="false">固有应变</button><button data-stage="displacement" aria-pressed="false">位移</button>
+      </nav>
+      <section class="is-step" data-page="thermal"><h3>温度场</h3>
+        <label class="is-upload">材料文件<input id="is-material" type="file" accept=".xmt"></label><small id="is-material-info">请选择 XMT 材料。</small>
+        <button id="is-start" class="primary full">计算温度</button><small id="is-start-reason"></small><button id="is-prepare">重新准备</button>
+        ${section('热源与焊路','<p id="is-process">导入 DAT 后读取工艺。</p><div id="is-contacts"></div><div id="is-paths"></div>')}
+        ${section('网格与换热参数',fields.map(field).join('')+'<div class="is-actions"><button id="is-apply">应用参数</button><button id="is-defaults">恢复默认值</button></div><output id="is-parameters"></output>',false,'advanced')}
+        ${section('温度历程','<label>温度显示<select id="is-view"><option value="frame">当前温度帧</option><option value="peak">历史最高温度</option></select></label><input id="is-frame" type="range" aria-label="温度帧" min="0" max="0" value="0"><output id="is-frame-time">尚无温度帧</output><label class="check"><input id="is-follow" type="checkbox" checked>跟随最新温度帧</label>',true)}
+      </section>
+      <section class="is-step" data-page="strain" hidden><h3>固有应变场</h3><p>按每个热步的温度累计板面塑性应变。</p>
+        <button id="is-strain" class="primary full">计算固有应变</button><small id="is-strain-note">请先完成温度计算。</small>
+        <label>应变分量<select id="is-component"><option value="plastic-x">板面 XX</option><option value="plastic-y">板面 YY</option><option value="peeq">等效塑性应变</option></select></label>
+      </section>
+      <section class="is-step" data-page="displacement" hidden><h3>位移场</h3><p>将固有应变施加到壳单元，按 DAT 工艺求解夹具约束下的板形。</p>
+        <button id="is-displacement" class="primary full">计算位移</button><small id="is-displacement-note">请先完成固有应变计算。</small>
+        <output id="is-mechanical-status"></output><label>变形显示倍率<input id="is-deformation-scale" type="number" min="0" step="any" value="1" disabled></label>
+      </section>
+      <select id="is-mechanical-view" hidden><option value="temperature">温度</option><option value="displacement">法向位移</option><option value="peeq">等效应变</option><option value="plastic-x">XX</option><option value="plastic-y">YY</option></select>
+      <div class="is-run"><output id="is-status" role="status">等待导入 DAT</output><progress id="is-progress" hidden></progress><output id="is-clocks">尚未开始计算</output><button id="is-cancel" hidden>停止</button></div>
+      ${section('板层与显示','<label>显示板层<select id="is-layer"></select></label><div id="is-layers"></div><label class="check"><input id="is-grid" type="checkbox" checked>计算网格</label><label class="check"><input id="is-show-paths" type="checkbox" checked>焊路</label><label class="check"><input id="is-show-fixtures" type="checkbox" checked>夹具区域</label>')}
+      ${section('色标与导出','<div class="is-legend"></div><output id="is-legend-unit">温度 / ℃</output><div class="is-range"><label>下限<input id="is-min" type="number" value="25" step="any"></label><label>上限<input id="is-max" type="number" value="1500" step="any"></label></div><output id="is-legend-error"></output><button id="is-export">导出计算结果 ZIP</button>')}`;
+    this.get('import').onclick=()=>document.querySelector<HTMLButtonElement>('#open-model')!.click();
+    for(const tab of this.panel.querySelectorAll<HTMLButtonElement>('[data-stage]')){
+      tab.onclick=()=>this.selectStage(tab.dataset.stage as typeof this.stage);
+    }
+    for(const step of ['strain','displacement'] as const){
+      this.get(step).onclick=()=>void this.action(async()=>{
+        this.pending=true;this.refresh();
+        try {
+          const state=await this.json<State>('advance/'+step,this.identity());
+          if(this.matches(state)){this.applyState(state);this.schedule();}
+        } finally {this.pending=false;}
+      });
+    }
+    this.get('component').onchange=()=>this.selectStage('strain');
     document.querySelector('main')!.append(this.panel);
-    for(const [id,icon,label] of [['prepare','trial','重新准备'],['start','play','开始计算'],['cancel','close','停止'],['export','download','导出计算结果 ZIP']] as const) {
+    for(const [id,icon,label] of [['prepare','trial','重新准备'],['start','play','计算温度'],['cancel','close','停止'],['export','download','导出计算结果 ZIP']] as const) {
       const button=this.get<HTMLButtonElement>(id);setIcon(button,icon,label);button.classList.remove('icon-button');const text=document.createElement('span');text.textContent=label;button.append(text);
     }
     this.get('prepare').onclick=()=>void this.action(()=>this.prepare());
@@ -141,9 +164,18 @@ export class InherentStrainTool {
     this.applied={};this.dirty=false;this.get<HTMLInputElement>('material').value='';this.get('material-info').textContent='请选择 XMT 材料。';
     this.clear();for(const [id] of fields)this.get<HTMLInputElement>(id).value='';
     this.get('status').textContent='等待导入 DAT';this.get('support').textContent=supported?'DAT 已导入，自动恢复二维外形并准备独立计算网格。':'请导入 Marc DAT 模型。';
+    this.selectStage('thermal');
     if(this.active&&supported)void this.action(()=>this.prepare());this.refresh();
   }
+  private selectStage(stage:typeof this.stage) {
+    this.stage=stage;
+    for(const tab of this.panel.querySelectorAll<HTMLElement>('[data-stage]'))tab.setAttribute('aria-pressed',String(tab.dataset.stage===stage));
+    for(const page of this.panel.querySelectorAll<HTMLElement>('[data-page]'))page.hidden=page.dataset.page!==stage;
+    this.get<HTMLSelectElement>('mechanical-view').value=stage==='thermal'?'temperature':stage==='strain'?this.get<HTMLSelectElement>('component').value:'displacement';
+    this.changeMechanicalView();
+  }
   private clearResults() {
+    this.strain=null;this.thermalInputsCurrent=false;
     this.frame=null;this.peak=null;this.mechanics=null;this.shownFrame=-1;this.frameRequest++;
     this.get<HTMLSelectElement>('mechanical-view').value='temperature';this.get('mechanical-status').textContent='尚无结构结果';
     this.get<HTMLInputElement>('min').value='25';this.get<HTMLInputElement>('max').value='1500';this.get('legend-unit').textContent='温度 / ℃';
@@ -170,6 +202,7 @@ export class InherentStrainTool {
       finally {this.pending=false;this.refresh();}
       this.revision++;this.materialReady=false;this.clear();
     }
+    if(Object.keys(values).some(key=>values[key]!==this.applied[key]))this.thermalInputsCurrent=false;
     this.applied=values;this.dirty=false;this.services.changed();this.get('parameters').textContent='参数已应用，下次计算使用这些设置。已有结果对应上次计算设置。';
     if(newGrid)await this.prepare();else this.parameterSources();
     this.refresh();
@@ -203,9 +236,9 @@ export class InherentStrainTool {
     const values=Object.fromEntries(calculationFields.filter(([id])=>this.applied[id]!==this.grid!.defaults[id]).map(([id])=>[id,this.applied[id]]));
     this.pending=true;this.refresh();
     try {
-      const state=await this.json<State>('start',{...this.identity(),...values});
+      const state=await this.json<State>('start',{...this.identity(),...values,staged:true});
       if(!this.matches(state))return;
-      this.clearResults();this.follow=true;this.get<HTMLInputElement>('follow').checked=true;
+      this.clearResults();this.thermalInputsCurrent=true;this.follow=true;this.get<HTMLInputElement>('follow').checked=true;
       this.get('mechanical-status').textContent='温度与冷却完成后自动计算应变和结构变形';this.applyState(state);this.schedule();
     } finally {this.pending=false;this.refresh();}
   }
@@ -225,11 +258,17 @@ export class InherentStrainTool {
     if(!this.running()&&this.material&&!this.materialReady)await this.uploadMaterial();
     if(state.frames>0&&this.follow&&this.shownFrame!==state.frames-1)await this.loadFrame(state.frames-1);
     if(state.frames>0&&this.get<HTMLSelectElement>('view').value==='peak')await this.loadPeak();
+    if(state.status==='strain_done'&&!this.strain) {
+      const result=await this.json<Record<string,number[]>>('strain?job_id='+encodeURIComponent(job));
+      if(job!==this.job)return;
+      this.strain=result;this.selectStage(this.stage);
+    }
     if(state.status==='complete'&&!this.mechanics) {
       const result=await this.json<MechanicsResult>(`mechanics?job_id=${encodeURIComponent(job)}`);if(job!==this.job)return;
       this.mechanics=result;const values=result.normal_displacement_mm;let low=Infinity,high=-Infinity;for(const value of values){low=Math.min(low,value);high=Math.max(high,value);}
       this.get('mechanical-status').textContent=`${result.released?'Cover 已释放 · Base 支撑保留':'所选工艺时段已完成 · Cover 保持约束'}\n法向位移 ${format(low)}～${format(high)} mm`;
     }
+    if(state.status==='complete')this.selectStage(this.stage);
     this.refresh();if(this.running())this.schedule();
   }
   private applyState(state:State) {
@@ -240,8 +279,6 @@ export class InherentStrainTool {
     this.get('clocks').textContent=`准备耗时 ${format(state.prepare_elapsed_s)} s`+(state.operation==='calculate'?` · 计算耗时 ${format(state.calculation_elapsed_s)} s`:' · 计算尚未开始');
     const progress=this.get<HTMLProgressElement>('progress');
     if(state.total!==null&&state.total>0){progress.max=state.total;progress.value=Math.min(state.total,state.completed);}else progress.removeAttribute('value');
-    const phase=state.operation==='prepare'?'prepare':state.phase==='release'?'structure':state.phase;
-    this.get('phases').querySelectorAll<HTMLElement>('li').forEach(item=>item.setAttribute('aria-current',item.dataset.phase===phase?'step':'false'));
     this.get<HTMLInputElement>('frame').max=String(Math.max(0,state.frames-1));this.refresh();
   }
   private renderGrid() {
@@ -275,11 +312,16 @@ export class InherentStrainTool {
     const error=!Number.isFinite(low)||!Number.isFinite(high)?'请输入有效的图例数值。':high<=low?'图例上限必须大于下限。':'';
     this.get('legend-error').textContent=error;minimum.setAttribute('aria-invalid',String(Boolean(error)));maximum.setAttribute('aria-invalid',String(Boolean(error)));
     const values=this.mechanicalValues();
-    if(values){if(error)return;this.viewer.setInherentDisplacement(this.mechanics!.displacement_mm,this.get<HTMLInputElement>('deformation-scale').valueAsNumber);this.viewer.setInherentTemperature(values,low,high);return;}
+    if(values){if(error)return;this.viewer.setInherentDisplacement(this.stage==='displacement'&&this.mechanics?this.mechanics.displacement_mm:null,this.get<HTMLInputElement>('deformation-scale').valueAsNumber);this.viewer.setInherentTemperature(values,low,high);return;}
     this.viewer.setInherentDisplacement(null);const temperature=this.get<HTMLSelectElement>('view').value==='frame'?this.frame?.temperature_c:this.peak;
+    if(this.stage!=='thermal'){this.viewer.setInherentTemperature(null,low,high);return;}
     if(temperature&&!error)this.viewer.setInherentTemperature(temperature,low,high);
   }
   private mechanicalValues() {
+    if(this.stage==='strain'&&this.strain) {
+      const key=this.get<HTMLSelectElement>('component').value;
+      return this.strain[key==='plastic-x'?'xx':key==='plastic-y'?'yy':'equivalent'];
+    }
     if(!this.mechanics)return null;
     switch(this.get<HTMLSelectElement>('mechanical-view').value){case 'displacement':return this.mechanics.normal_displacement_mm;case 'peeq':return this.mechanics.equivalent_plastic_strain;case 'plastic-x':return this.mechanics.plastic_strain.map(value=>value[0]);case 'plastic-y':return this.mechanics.plastic_strain.map(value=>value[1]);default:return null;}
   }
@@ -291,7 +333,13 @@ export class InherentStrainTool {
   private refresh() {
     const running=this.running(),busy=this.pending||this.materialUploading||running;
     this.get<HTMLButtonElement>('prepare').hidden=!!this.grid||busy||!this.supported;this.get<HTMLButtonElement>('prepare').disabled=busy;
-    const reason=!this.supported?'请导入 Marc DAT 模型。':this.materialUploading?'正在读取 XMT 材料。':busy?(this.state?.stop_requested?'正在停止，等待当前操作结束。':this.state?.operation==='calculate'?'正在计算，可以点击停止。':'正在准备二维计算网格，可以点击停止。'):!this.grid?'网格尚未准备完成，请点击重新准备。':!this.materialReady?'网格已准备完成，请选择 XMT 材料。':this.dirty?'请应用高级参数中的修改。':'准备完成，点击开始计算。';
+    const reason=!this.supported?'请导入 Marc DAT 模型。':this.materialUploading?'正在读取 XMT 材料。':busy?(this.state?.stop_requested?'正在停止，等待当前操作结束。':this.state?.operation==='calculate'?'正在计算，可以点击停止。':'正在准备二维计算网格，可以点击停止。'):!this.grid?'网格尚未准备完成，请点击重新准备。':!this.materialReady?'网格已准备完成，请选择 XMT 材料。':this.dirty?'请应用高级参数中的修改。':'准备完成，可计算温度。';
+    this.get('progress').hidden=!busy;
+    this.get('cancel').hidden=!busy;
+    this.get<HTMLButtonElement>('strain').disabled=busy||this.dirty||!this.thermalInputsCurrent||this.state?.status!=='thermal_done';
+    this.get<HTMLButtonElement>('displacement').disabled=busy||this.dirty||!this.thermalInputsCurrent||this.state?.status!=='strain_done';
+    this.get('strain-note').textContent=this.strain?'已计算，可切换应变分量。':this.thermalInputsCurrent&&this.state?.status==='thermal_done'?'温度历程已就绪。':'请先完成温度计算。';
+    this.get('displacement-note').textContent=this.mechanics?'位移场已就绪。':this.thermalInputsCurrent&&this.strain?'固有应变已就绪。':'请先完成固有应变计算。';
     this.get('start-reason').textContent=reason;this.get<HTMLButtonElement>('start').disabled=busy||!this.grid||!this.materialReady||this.dirty;
     this.get<HTMLButtonElement>('cancel').disabled=!this.state?.can_stop||this.pending;
     this.get<HTMLButtonElement>('export').disabled=!this.state?.frames||busy;

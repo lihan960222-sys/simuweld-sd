@@ -2,6 +2,7 @@ from io import BytesIO
 from dataclasses import replace
 import json
 import logging
+from tempfile import TemporaryFile
 from pathlib import Path
 import sys
 from threading import Event, RLock, Thread
@@ -34,6 +35,8 @@ class TemperatureJob:
         self.frames = []
         self.peak = None
         self.mechanical_result = None
+        self.history = None
+        self.strain_result = None
         self.lock = RLock()
         self.cancel = Event()
         self.thread = None
@@ -223,6 +226,7 @@ class TemperatureJob:
         self.update(status='ready', phase='ready', stage='计算数据已准备完成', target_s=grid.plan['end_s'], completed=len(cells), total=len(cells))
 
     def calculate(self, settings):
+        self.reset_stages()
         settings = dict(settings)
         overrides = {name for name, value in settings.items() if value is not None}
         for name in self.preview['defaults']:
@@ -230,7 +234,7 @@ class TemperatureJob:
                 continue
             if settings.get(name) is None:
                 settings[name] = self.preview['defaults'][name]
-        settings['manual_parameters'] = sorted(overrides - {'model_id', 'revision', 'job_id', 'mechanics'})
+        settings['manual_parameters'] = sorted(overrides - {'model_id', 'revision', 'job_id', 'mechanics', 'staged'})
         self.calculation = settings
         self.frames = []
         self.mechanical_result = None
@@ -291,9 +295,15 @@ class TemperatureJob:
         strain_state = (MaterialState.zeros((len(self.active),), thermal['initial_temperature'])
                         if settings.get('mechanics', False) else None)
 
+        staged = settings.get("staged", False)
+        if staged:
+            self.history = TemporaryFile()
+
         def accumulate(temperature):
             nonlocal strain_state
-            if strain_state is not None:
+            if staged:
+                self.history.write(temperature.ravel()[self.active].astype(np.float64).tobytes())
+            elif strain_state is not None:
                 _, strain_state, _ = constrained_thermal_update(
                     self.material, temperature.ravel()[self.active], strain_state,
                     allow_constant_extension=True, reference_temperature=thermal['initial_temperature'])
@@ -323,7 +333,7 @@ class TemperatureJob:
                 if time >= next_record - 1e-12 or time >= settings['end_s'] - 1e-12 or any(abs(time - event) < 1e-12 for event in events):
                     save()
                     next_record = (np.floor(time / settings['record_interval_s']) + 1) * settings['record_interval_s']
-                self.update(stage='计算 DAT 工艺温度与累计应变', time_s=float(time), steps=steps, completed=float(time),
+                self.update(stage='计算 DAT 工艺温度' if staged else '计算 DAT 工艺温度与累计应变', time_s=float(time), steps=steps, completed=float(time),
                             step_min_s=min(self.state['step_min_s'] or step, step), step_max_s=max(self.state['step_max_s'] or step, step),
                             max_temperature_c=float(temperature.ravel()[self.active].max() - 273.15), energy=dict(solver.energy))
             self.check_cancel()
@@ -341,39 +351,75 @@ class TemperatureJob:
                         if time >= next_record:
                             save()
                             next_record = time + max(settings['record_interval_s'], .1)
-                        self.update(time_s=float(time), steps=steps, stage='焊后冷却与塑性应变累计；目标温差 5 ℃',
+                        self.update(time_s=float(time), steps=steps, stage='焊后冷却，目标温差 5 ℃' if staged else '焊后冷却与塑性应变累计；目标温差 5 ℃',
                                     step_min_s=min(self.state['step_min_s'] or step, step), step_max_s=max(self.state['step_max_s'] or step, step),
                                     max_temperature_c=float(temperature.ravel()[self.active].max() - 273.15),
                                     energy=dict(solver.energy))
                 self.check_cancel()
-                self.update(phase='structure', stage='生成 Shell 网格与 DAT 夹具约束', total=None)
-                structure = Structure(self.grid, self.material, spacing_mm=self.grid.spacing * 1000,
-                                      model=self.model, length_unit=self.settings['length_unit'])
-                if not structure.fixture_surfaces['base'] or not structure.fixture_surfaces['cover']:
-                    raise ValueError('DAT 中缺少可确定作用区域的 Base 或 Cover 数据')
-                if not len(structure.cover_dofs) or not np.any(structure.contact_types == 0):
-                    raise ValueError('DAT 夹具与板件没有有效接触区域，请检查坐标、单位和接触位置')
-                shape = (len(structure.connectivity), 4, 5)
-                state = MaterialState(
-                    np.broadcast_to((structure.map @ strain_state.plastic)[:, None, None, :], (*shape, 6)).copy(),
-                    np.broadcast_to((structure.map @ strain_state.equivalent)[:, None, None], shape).copy(),
-                    np.broadcast_to((structure.map @ strain_state.peak_temperature)[:, None, None], shape).copy(),
-                    np.broadcast_to((structure.map @ np.asarray(strain_state.extrapolated, dtype=float))[:, None, None] > 0, shape).copy())
-                mechanics = Mechanics(structure, self.material, initial_temperature=thermal['initial_temperature'],
-                                      inherent_state=state, cancelled=self.cancel.is_set,
-                                      progress=lambda message: self.update(stage=message))
-                mechanics.time_s = float(solver.time)
-                self.update(stage='整体施加累计固有应变并求解 Shell 平衡')
-                mechanics.apply_inherent()
-                if solver.time >= self.grid.plan['end_s']:
-                    self.update(phase='release', stage='解除 Cover 约束并求解最终变形')
-                    mechanics.release()
-                self.mechanical_result = self.mechanics_preview(mechanics)
+                if staged:
+                    self.update(status='thermal_done', phase='thermal_done', stage='温度场已完成，可计算固有应变')
+                    return
+                mechanics = self.solve_displacement(strain_state, thermal['initial_temperature'], solver.time)
             self.update(status='complete', phase='complete', completed=1., total=1., progress_unit='', target_s=float(solver.time), stage=('夹具释放与鼓包计算已完成' if mechanics is not None and not mechanics.cover
                                                  else '指定时段计算已完成'))
         finally:
             if not self.frames or self.frames[-1][0] != accepted_time:
                 save()
+
+    def reset_stages(self):
+        if self.history is not None:
+            self.history.close()
+            self.history = None
+        self.strain_result = None
+
+    def solve_strain(self):
+        reference = self.calculation['initial_c'] + 273.15
+        state = MaterialState.zeros((len(self.active),), reference)
+        width = len(self.active) * 8
+        self.history.seek(0)
+        step = 0
+        self.update(phase='strain', stage='按温度历程计算固有应变', total=self.state['steps'], completed=0)
+        while data := self.history.read(width):
+            self.check_cancel()
+            _, state, _ = constrained_thermal_update(
+                self.material, np.frombuffer(data, dtype=np.float64), state,
+                allow_constant_extension=True, reference_temperature=reference)
+            step += 1
+            self.update(completed=step)
+        self.history.close()
+        self.history = None
+        self.strain_result = state
+        self.update(status='strain_done', phase='strain_done', stage='固有应变已完成，可计算位移')
+
+    def solve_staged_displacement(self):
+        self.solve_displacement(self.strain_result, self.calculation['initial_c'] + 273.15, self.state['time_s'])
+        self.update(status='complete', phase='complete', stage='位移计算完成', completed=1, total=1)
+
+    def solve_displacement(self, strain_state, initial_temperature, end_time):
+        self.update(phase='structure', stage='生成 Shell 网格与 DAT 夹具约束', total=None)
+        structure = Structure(self.grid, self.material, spacing_mm=self.grid.spacing * 1000,
+                              model=self.model, length_unit=self.settings['length_unit'])
+        if not structure.fixture_surfaces['base'] or not structure.fixture_surfaces['cover']:
+            raise ValueError('DAT 中缺少可确定作用区域的 Base 或 Cover 数据')
+        if not len(structure.cover_dofs) or not np.any(structure.contact_types == 0):
+            raise ValueError('DAT 夹具与板件没有有效接触区域，请检查坐标、单位和接触位置')
+        shape = (len(structure.connectivity), 4, 5)
+        state = MaterialState(
+            np.broadcast_to((structure.map @ strain_state.plastic)[:, None, None, :], (*shape, 6)).copy(),
+            np.broadcast_to((structure.map @ strain_state.equivalent)[:, None, None], shape).copy(),
+            np.broadcast_to((structure.map @ strain_state.peak_temperature)[:, None, None], shape).copy(),
+            np.broadcast_to((structure.map @ np.asarray(strain_state.extrapolated, dtype=float))[:, None, None] > 0, shape).copy())
+        mechanics = Mechanics(structure, self.material, initial_temperature=initial_temperature,
+                              inherent_state=state, cancelled=self.cancel.is_set,
+                              progress=lambda message: self.update(stage=message))
+        mechanics.time_s = float(end_time)
+        self.update(stage='整体施加累计固有应变并求解 Shell 平衡')
+        mechanics.apply_inherent()
+        if end_time >= self.grid.plan['end_s']:
+            self.update(phase='release', stage='解除 Cover 约束并求解最终变形')
+            mechanics.release()
+        self.mechanical_result = self.mechanics_preview(mechanics)
+        return mechanics
 
     def mechanics_preview(self, mechanics):
         structure = mechanics.structure
@@ -455,6 +501,11 @@ class TemperatureJob:
         with ZipFile(output, 'w', ZIP_DEFLATED) as archive:
             archive.writestr('parameters.json', json.dumps(metadata, ensure_ascii=False, indent=2, allow_nan=False))
             archive.writestr('temperature.npz', arrays.getvalue())
+            if self.strain_result is not None:
+                strain = BytesIO()
+                np.savez_compressed(strain, plastic_mandel=self.strain_result.plastic,
+                                    equivalent=self.strain_result.equivalent, active=self.active)
+                archive.writestr('inherent_strain.npz', strain.getvalue())
             if self.mechanical_result is not None:
                 archive.writestr('mechanics.json', json.dumps(self.mechanical_result, ensure_ascii=False, allow_nan=False))
                 structure = self.mechanical_structure

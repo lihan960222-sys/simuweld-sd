@@ -37,6 +37,7 @@ test('DAT 自动准备、二维显示、可选参数、真实计算和停止',as
   await expect.poll(async()=> (await scene()).layers.length).toBe(2);
   let state=await scene();expect(state.orthographic).toBe(true);expect(state.model).toBe(false);
   expect(state.layers.map(item=>item.visible)).toEqual([false,true]);expect(state.fixtures.length).toBeGreaterThan(0);
+  await panel.getByText('板层与显示',{exact:true}).click();
   await page.locator('#is-layer').selectOption('0');
   expect((await scene()).layers.map(item=>item.visible)).toEqual([true,false]);
   await page.locator('#is-grid').uncheck();expect((await scene()).layers.every(item=>!item.grid)).toBe(true);
@@ -64,18 +65,24 @@ test('DAT 自动准备、二维显示、可选参数、真实计算和停止',as
   await page.locator('#is-start').click();
   const values=(await request).postDataJSON();expect(values.end_s).toBe(.002);expect(values.record_interval_s).toBe(.001);
   expect(values).not.toHaveProperty('ambient_c');expect(values).not.toHaveProperty('spacing_mm');
+  await panel.getByRole('button',{name:'固有应变',exact:true}).click();
+  await page.locator('#is-strain').click();
+  await expect(panel).toHaveAttribute('data-status','strain_done');
+  await panel.getByRole('button',{name:'位移',exact:true}).click();
+  await page.locator('#is-displacement').click();
   const response=await mechanics;expect(response.status()).toBe(200);const result=await response.json();
   expect(result.released).toBe(false);expect(result.normal_displacement_mm.every(Number.isFinite)).toBe(true);
   await expect(page.locator('#is-mechanical-view')).toBeEnabled();
   await expect(page.locator('#is-clocks')).toContainText('计算耗时');
   await expect(page.locator('#is-frame-time')).toContainText('0.002');
   await expect(page.locator('#is-mechanical-status')).toContainText('Cover 保持约束');
+  await panel.getByText('色标与导出',{exact:true}).click();
   await page.locator('#is-min').fill('25');await page.locator('#is-max').fill('20');
   await expect(page.locator('#is-legend-error')).not.toBeEmpty();
   await page.locator('#is-max').fill('1500');await expect(page.locator('#is-legend-error')).toBeEmpty();
-  for(const mode of ['displacement','peeq','plastic-x','plastic-y','temperature']){
-    await page.locator('#is-mechanical-view').selectOption(mode);await expect(page.locator('#is-legend-error')).toBeEmpty();
-  }
+  await panel.getByRole('button',{name:'固有应变',exact:true}).click();
+  for(const mode of ['peeq','plastic-x','plastic-y'])await page.locator('#is-component').selectOption(mode);
+  await panel.getByRole('button',{name:'温度',exact:true}).click();
   expect((await scene()).orthographic).toBe(true);
   await page.locator('#is-view').selectOption('peak');await page.locator('#is-view').selectOption('frame');
   await page.locator('#is-frame').fill('0');await expect(page.locator('#is-frame-time')).toContainText('0 s');
