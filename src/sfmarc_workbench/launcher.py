@@ -11,7 +11,6 @@ import time
 import webbrowser
 
 import uvicorn
-import webview
 
 from .server import create_app
 
@@ -53,6 +52,7 @@ def main():
         server.run(sockets=[listener])
         return
 
+    import webview
     runtime = (Path(sys._MEIPASS) if getattr(sys, "frozen", False) else base / "work") / "webview2"
     if not (runtime / "msedgewebview2.exe").is_file():
         raise FileNotFoundError("缺少随包 WebView2 运行环境，请完整解压软件包")

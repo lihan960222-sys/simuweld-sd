@@ -63,7 +63,12 @@ export class InherentStrainTool {
 
   constructor(private viewer:Viewer,private services:Services) {
     this.panel=document.createElement('aside');this.panel.className='right inherent-panel';this.panel.dataset.tool='inherent-strain';this.panel.hidden=true;
-    this.panel.innerHTML=`<h2>固有应变法</h2><p id="is-support" class="muted">请导入 Marc DAT 模型。</p>
+    this.panel.innerHTML=`<h2>固有应变法</h2>
+      <details class="is-group is-cases"><summary>计算案例</summary><div class="is-content">
+        <a href="/modules/inherent_strain/c0004/index.html" target="_blank" rel="noopener">C0004 · 双板封边焊 ↗</a>
+        <small>25 °C 起焊 · 温度历程与松夹变形</small>
+      </div></details>
+      <p id="is-support" class="muted">请导入 Marc DAT 模型。</p>
       <div class="is-run">
         <ol id="is-phases" aria-label="计算阶段"><li data-phase="prepare">准备</li><li data-phase="thermal">热过程</li><li data-phase="cooling">冷却</li><li data-phase="structure">结构</li><li data-phase="complete">完成</li></ol>
         <output id="is-status" role="status" aria-live="polite">等待导入 DAT</output>

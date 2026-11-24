@@ -26,3 +26,6 @@
 #is-paths p { padding:8px 0; }
 .is-legend { height:12px;border-radius:4px;background:linear-gradient(to right,#1931f3,#19e3f3,#19f34a,#e3f319,#f31919); }
 .inherent-panel input[type=file] { font-size:12px;max-width:100%; }
+.is-cases .is-content{display:grid;gap:4px;border-left:3px solid #b27843}
+.is-cases a{font-weight:650;color:#166359;text-underline-offset:3px}
+.is-cases small{color:#546866}
