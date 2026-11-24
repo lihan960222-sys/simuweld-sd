@@ -27,14 +27,4 @@ aside p{border-top:1px solid #e0e7e3;padding-top:12px;color:#465d5a}a{color:#175
 <aside><h2>松夹后的板形</h2><dl><dt>上板端部翘起</dt><dd>1.986 <small>mm</small></dd><dt>底板端部翘起</dt><dd>2.167 <small>mm</small></dd><dt>上板局部鼓高</dt><dd>0.097 <small>mm</small></dd></dl>
 <p>结构网格 1.0 mm。改用 1.6 mm 网格时，局部鼓高为 0.052 mm。该工况尚无 Simufact 对照。</p>
 <p>热网格 0.2–1.6 mm，每板五层。焊点峰温超过材料表上限 2000 °C。</p><a href="results.json" download>下载计算摘要 ↓</a></aside></div></main>
-<script>
-const buttons=document.querySelectorAll('nav button');
-for(const button of buttons) button.addEventListener('click',()=>{
-  for(const item of buttons)item.setAttribute('aria-pressed',String(item===button));
-  const field=document.querySelector('#field');
-  field.src=button.dataset.img;
-  field.alt=button.textContent;
-  document.querySelector('#original').href=button.dataset.img;
-  document.querySelector('#caption').textContent=button.dataset.text;
-});
-</script></html>
+<script src="views.js"></script></html>
